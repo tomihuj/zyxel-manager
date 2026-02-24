@@ -16,20 +16,37 @@ from app.adapters.base import FirewallAdapter
 
 logger = logging.getLogger(__name__)
 
-# Section → CLI command mapping (verified against USG FLEX 500 firmware v250926)
-_SECTION_CLI: dict[str, str] = {
-    "system":          "show version",
-    "interfaces":      "show interface all",
-    "routing":         "show ip route static",
-    "nat":             "show nat rule",
-    "nat_snat":        "show system default-snat",
-    "firewall_rules":  "show secure-policy",
-    "vpn":             "show l2tp-over-ipsec",
-    "dns":             "show ip dns server status",
-    "ntp":             "show ntp server",
-    "address_objects": "show address-object",
-    "service_objects": "show service-object",
-    "users":           "show user local",
+# Section → ordered list of CLI commands to try (first non-empty result wins).
+# Multiple candidates handle firmware differences across FLEX models.
+_SECTION_CLI: dict[str, list[str]] = {
+    "system":          ["show version"],
+    "interfaces":      ["show interface all"],
+    "routing":         ["show ip route static"],
+    "nat":             [
+        "show nat rule many-to-one",   # ZLD 5.x many-to-one SNAT rules
+        "show nat rule 1-to-1",        # 1:1 NAT / DNAT rules
+        "show virtual-server",         # port-forwarding / virtual server
+        "show policy nat",             # policy-based NAT
+        "show policy-nat",             # alternative spelling
+        "show snat",                   # SNAT only
+        "show nat rule",               # generic
+        "show ip nat",                 # legacy fallback
+    ],
+    "nat_snat":        ["show system default-snat"],
+    "firewall_rules":  ["show secure-policy"],
+    "vpn":             ["show l2tp-over-ipsec"],
+    "dns":             ["show ip dns server status"],
+    "ntp":             ["show ntp server"],
+    "address_objects": ["show address-object"],
+    "service_objects": ["show service-object"],
+    "users":           [
+        "show user admin list",        # ZLD 5.x admin users
+        "show admin",                  # alternative
+        "show user local",             # local user accounts
+        "show object-user",            # user objects
+        "show local-user",             # local user list
+        "show user",                   # generic fallback
+    ],
 }
 
 _CGI_PATH = "/cgi-bin/zysh-cgi"
@@ -323,7 +340,7 @@ class ZyxelAdapter(FirewallAdapter):
         }
 
     def _fetch_section(self, client: httpx.Client, base_url: str, cli_cmd: str) -> list | dict | None:
-        """Run a CLI command via zysh-cgi and return parsed data."""
+        """Run a single CLI command via zysh-cgi and return parsed data."""
         resp = client.post(
             f"{base_url}{_CGI_PATH}",
             data={"filter": "js2", "cmd": cli_cmd, "write": "0"},
@@ -332,10 +349,20 @@ class ZyxelAdapter(FirewallAdapter):
         if resp.status_code == 200:
             result = _parse_zysh_response(resp.text, cmd=cli_cmd)
             if not result:
-                logger.info("ZyxelAdapter: cmd=%r returned empty; raw=%r", cli_cmd, resp.text[:500])
+                logger.info("ZyxelAdapter: cmd=%r returned empty; raw=%r", cli_cmd, resp.text[:300])
             return result
         logger.warning("ZyxelAdapter: zysh-cgi %r → HTTP %s", cli_cmd, resp.status_code)
         return None
+
+    def _fetch_section_multi(self, client: httpx.Client, base_url: str, candidates: list[str]) -> list | dict | None:
+        """Try each candidate command in order; return first non-empty result."""
+        for cmd in candidates:
+            result = self._fetch_section(client, base_url, cmd)
+            if result:
+                logger.info("ZyxelAdapter: section resolved via cmd=%r value=%r", cmd, result)
+                return result
+        logger.warning("ZyxelAdapter: all candidates exhausted for cmds=%r", candidates)
+        return {"_error": "not_available", "_detail": "No CLI command returned data for this section. The account may lack privilege or this section is not accessible via zysh-cgi on this firmware."}
 
     def fetch_config(self, device, credentials: dict, section: str = "full") -> dict:
         try:
@@ -345,15 +372,15 @@ class ZyxelAdapter(FirewallAdapter):
 
                 if section == "full":
                     result = {}
-                    for sec, cli_cmd in _SECTION_CLI.items():
-                        result[sec] = self._fetch_section(c, base, cli_cmd)
+                    for sec, candidates in _SECTION_CLI.items():
+                        result[sec] = self._fetch_section_multi(c, base, candidates)
                     return result
 
-                cli_cmd = _SECTION_CLI.get(section)
-                if not cli_cmd:
+                candidates = _SECTION_CLI.get(section)
+                if not candidates:
                     logger.warning("ZyxelAdapter: no CLI command for section %r", section)
                     return None
-                return self._fetch_section(c, base, cli_cmd)
+                return self._fetch_section_multi(c, base, candidates)
         except Exception as e:
             logger.error("ZyxelAdapter.fetch_config: %s", e)
             raise
