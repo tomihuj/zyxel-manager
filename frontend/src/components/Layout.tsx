@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   Box, Drawer, AppBar, Toolbar, Typography, List, ListItem,
   ListItemButton, ListItemIcon, ListItemText, IconButton, Avatar,
-  Menu, MenuItem, Divider,
+  Menu, MenuItem, Divider, Tooltip,
 } from '@mui/material'
 import DashboardIcon from '@mui/icons-material/Dashboard'
 import RouterIcon from '@mui/icons-material/Router'
@@ -12,7 +12,12 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import AssessmentIcon from '@mui/icons-material/Assessment'
 import PeopleIcon from '@mui/icons-material/People'
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
+import BackupIcon from '@mui/icons-material/Backup'
+import ArticleIcon from '@mui/icons-material/Article'
+import BugReportIcon from '@mui/icons-material/BugReport'
 import { useAuthStore } from '../store/auth'
+import { useDiagStore } from '../store/diag'
+import DiagPanel from './DiagPanel'
 
 const DRAWER_WIDTH = 240
 
@@ -24,12 +29,15 @@ const NAV = [
   { label: 'Reports',     path: '/reports', icon: <AssessmentIcon /> },
   { label: 'Users & Roles',path: '/users',   icon: <PeopleIcon /> },
   { label: 'Compare',      path: '/compare', icon: <CompareArrowsIcon /> },
+  { label: 'Backups',      path: '/backups', icon: <BackupIcon /> },
+  { label: 'Logs',         path: '/logs',    icon: <ArticleIcon /> },
 ]
 
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, clearAuth } = useAuthStore()
+  const { enabled: diagEnabled, toggle: toggleDiag } = useDiagStore()
   const [anchor, setAnchor] = useState<null | HTMLElement>(null)
 
   return (
@@ -40,6 +48,11 @@ export default function Layout() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 700 }}>
             Zyxel Manager
           </Typography>
+          <Tooltip title={diagEnabled ? 'Disable Diagnostic Mode' : 'Enable Diagnostic Mode'}>
+            <IconButton onClick={toggleDiag} color="inherit" sx={{ opacity: diagEnabled ? 1 : 0.5 }}>
+              <BugReportIcon />
+            </IconButton>
+          </Tooltip>
           <IconButton onClick={(e) => setAnchor(e.currentTarget)} color="inherit">
             <Avatar sx={{ width: 32, height: 32, bgcolor: 'secondary.main', fontSize: 14 }}>
               {user?.username?.[0]?.toUpperCase()}
@@ -78,9 +91,18 @@ export default function Layout() {
         </Box>
       </Drawer>
 
-      <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8, bgcolor: 'background.default', minHeight: '100vh' }}>
-        <Outlet />
-      </Box>
+      {diagEnabled ? (
+        <Box component="main" sx={{ flexGrow: 1, display: 'flex', mt: 8, overflow: 'hidden', minHeight: '100vh' }}>
+          <Box sx={{ flex: 1, p: 3, overflow: 'auto', bgcolor: 'background.default' }}>
+            <Outlet />
+          </Box>
+          <DiagPanel />
+        </Box>
+      ) : (
+        <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8, bgcolor: 'background.default', minHeight: '100vh' }}>
+          <Outlet />
+        </Box>
+      )}
     </Box>
   )
 }
