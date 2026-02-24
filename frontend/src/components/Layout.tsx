@@ -92,8 +92,8 @@ export default function Layout() {
       </Drawer>
 
       {diagEnabled ? (
-        <Box component="main" sx={{ flexGrow: 1, display: 'flex', mt: 8, overflow: 'hidden', minHeight: '100vh' }}>
-          <Box sx={{ flex: 1, p: 3, overflow: 'auto', bgcolor: 'background.default' }}>
+        <Box component="main" sx={{ flexGrow: 1, display: 'flex', mt: 8, height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, p: 3, overflowY: 'auto', height: '100%', bgcolor: 'background.default' }}>
             <Outlet />
           </Box>
           <DiagPanel />

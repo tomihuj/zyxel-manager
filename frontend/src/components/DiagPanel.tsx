@@ -163,6 +163,7 @@ export default function DiagPanel() {
       sx={{
         width: 440,
         flexShrink: 0,
+        height: '100%',
         bgcolor: '#0f172a',
         borderLeft: '1px solid #1e293b',
         display: 'flex',
