@@ -23,9 +23,11 @@ _MOCK_CONFIG_TEMPLATE = {
         "default_gateway": "203.0.113.254",
         "static_routes": [],
     },
-    "nat": {
-        "rules": [{"name": "WAN-to-LAN", "type": "masquerade", "interface": "wan1"}]
-    },
+    "nat": [
+        {"no": 1, "name": "WAN-to-LAN", "type": "Many-to-One", "incoming_interface": "wan1", "original_ip": "192.168.1.0/24", "mapped_ip": "wan1 ip", "enabled": True},
+        {"no": 2, "name": "DMZ-to-WAN", "type": "Many-to-One", "incoming_interface": "wan1", "original_ip": "192.168.2.0/24", "mapped_ip": "wan1 ip", "enabled": True},
+    ],
+    "nat_snat": [{"default_snat": "yes"}],
     "firewall_rules": [
         {"name": "Allow-LAN-to-WAN", "src_zone": "LAN", "dst_zone": "WAN", "action": "allow", "enabled": True},
         {"name": "Block-WAN-to-LAN", "src_zone": "WAN", "dst_zone": "LAN", "action": "deny", "enabled": True},

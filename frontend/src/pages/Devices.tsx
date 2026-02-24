@@ -5,6 +5,7 @@ import {
   DialogContent, DialogActions, TextField, MenuItem, Snackbar, Tooltip, Card,
   Table, TableHead, TableRow, TableCell, TableBody, CircularProgress, Alert,
   Collapse, InputAdornment, Accordion, AccordionSummary, AccordionDetails,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import AddIcon from '@mui/icons-material/Add'
@@ -22,6 +23,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import DescriptionIcon from '@mui/icons-material/Description'
 import DownloadIcon from '@mui/icons-material/Download'
+import ViewListIcon from '@mui/icons-material/ViewList'
+import TableRowsIcon from '@mui/icons-material/TableRows'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDevices, createDevice, updateDevice, deleteDevice, testConnection, syncDevice, getDeviceConfig } from '../api/devices'
 import { api } from '../api/client'
@@ -115,6 +118,59 @@ function ConfigSections({ data }: { data: Record<string, any> }) {
   )
 }
 
+function flattenConfig(data: Record<string, any>): { section: string; key: string; value: string }[] {
+  const rows: { section: string; key: string; value: string }[] = []
+  for (const [section, value] of Object.entries(data)) {
+    const sec = sectionLabel(section)
+    if (value === null || value === undefined) {
+      rows.push({ section: sec, key: '—', value: '—' })
+    } else if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== null && typeof item === 'object') {
+          for (const [k, v] of Object.entries(item)) {
+            rows.push({ section: sec, key: sectionLabel(k), value: v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v) })
+          }
+        } else {
+          rows.push({ section: sec, key: '—', value: String(item) })
+        }
+      })
+    } else if (typeof value === 'object') {
+      for (const [k, v] of Object.entries(value)) {
+        rows.push({ section: sec, key: sectionLabel(k), value: v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v) })
+      }
+    } else {
+      rows.push({ section: sec, key: sec, value: String(value) })
+    }
+  }
+  return rows
+}
+
+function ConfigTable({ data }: { data: Record<string, any> }) {
+  const rows = flattenConfig(data)
+  return (
+    <Box sx={{ overflowX: 'auto', mt: 1 }}>
+      <Table size="small">
+        <TableHead>
+          <TableRow sx={{ '& th': { fontWeight: 600, fontSize: 12 } }}>
+            <TableCell width={160}>Section</TableCell>
+            <TableCell width={200}>Key</TableCell>
+            <TableCell>Value</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((row, i) => (
+            <TableRow key={i} sx={{ '&:hover': { bgcolor: 'action.hover' } }}>
+              <TableCell sx={{ fontSize: 12, color: 'text.secondary', whiteSpace: 'nowrap' }}>{row.section}</TableCell>
+              <TableCell sx={{ fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}>{row.key}</TableCell>
+              <TableCell sx={{ fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{row.value}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Box>
+  )
+}
+
 const defaultForm = {
   name: '', model: 'USG FLEX 100', mgmt_ip: '', port: 443,
   protocol: 'https', adapter: 'mock', username: 'admin', password: '', tags: '',
@@ -138,6 +194,7 @@ export default function Devices() {
   const [configData, setConfigData] = useState<Record<string, any> | null>(null)
   const [configLoading, setConfigLoading] = useState(false)
   const [configError, setConfigError] = useState('')
+  const [configView, setConfigView] = useState<'accordion' | 'table'>('accordion')
 
   const ef = (k: string, v: unknown) => setEditForm((p) => ({ ...p, [k]: v }))
 
@@ -468,7 +525,11 @@ export default function Devices() {
       <Dialog open={!!configDevice} onClose={() => setConfigDevice(null)} maxWidth="lg" fullWidth>
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           Config — {configDevice?.name}
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <ToggleButtonGroup size="small" exclusive value={configView} onChange={(_, v) => v && setConfigView(v)}>
+              <ToggleButton value="accordion"><Tooltip title="Accordion"><ViewListIcon fontSize="small" /></Tooltip></ToggleButton>
+              <ToggleButton value="table"><Tooltip title="Table"><TableRowsIcon fontSize="small" /></Tooltip></ToggleButton>
+            </ToggleButtonGroup>
             <Button startIcon={<SyncIcon />} onClick={() => openConfig(configDevice!)} disabled={configLoading} size="small">
               Refresh
             </Button>
@@ -484,7 +545,8 @@ export default function Devices() {
             </Box>
           )}
           {configError && <Alert severity="error">{configError}</Alert>}
-          {configData && <ConfigSections data={configData} />}
+          {configData && configView === 'accordion' && <ConfigSections data={configData} />}
+          {configData && configView === 'table' && <ConfigTable data={configData} />}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfigDevice(null)}>Close</Button>
