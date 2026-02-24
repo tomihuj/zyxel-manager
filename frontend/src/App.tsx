@@ -8,6 +8,7 @@ import Groups from './pages/Groups'
 import BulkActions from './pages/BulkActions'
 import Reports from './pages/Reports'
 import Users from './pages/Users'
+import DeviceConfig from './pages/DeviceConfig'
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         <Route path="devices" element={<Devices />} />
+        <Route path="devices/:id/config" element={<DeviceConfig />} />
         <Route path="groups" element={<Groups />} />
         <Route path="bulk" element={<BulkActions />} />
         <Route path="reports" element={<Reports />} />

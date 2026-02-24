@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Box, Typography, Button, Chip, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Snackbar, Tooltip, Card,
@@ -8,6 +9,7 @@ import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import WifiIcon from '@mui/icons-material/Wifi'
 import SyncIcon from '@mui/icons-material/Sync'
+import SettingsIcon from '@mui/icons-material/Settings'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDevices, createDevice, deleteDevice, testConnection, syncDevice } from '../api/devices'
 import type { Device } from '../types'
@@ -18,6 +20,7 @@ const defaultForm = {
 }
 
 export default function Devices() {
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const { data: devices = [], isLoading } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
   const [open, setOpen] = useState(false)
@@ -69,9 +72,12 @@ export default function Devices() {
     },
     { field: 'firmware_version', headerName: 'Firmware', width: 130 },
     {
-      field: 'actions', headerName: '', width: 130, sortable: false,
+      field: 'actions', headerName: '', width: 160, sortable: false,
       renderCell: (p) => (
         <Box>
+          <Tooltip title="Configure">
+            <IconButton size="small" onClick={() => navigate(`/devices/${p.row.id}/config`)}><SettingsIcon fontSize="small" /></IconButton>
+          </Tooltip>
           <Tooltip title="Test connection">
             <IconButton size="small" onClick={() => testMut.mutate(p.row.id)}><WifiIcon fontSize="small" /></IconButton>
           </Tooltip>

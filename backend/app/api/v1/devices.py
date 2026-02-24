@@ -179,3 +179,28 @@ def list_snapshots(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current
     ).all()
     return [{"id": str(s.id), "version": s.version, "checksum": s.checksum,
              "section": s.section, "created_at": s.created_at} for s in snaps]
+
+
+@router.get("/{device_id}/config")
+def get_device_config(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser,
+                      section: str = "full"):
+    rbac.require("view_devices")
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404)
+    creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
+    return get_adapter(device.adapter).fetch_config(device, creds, section)
+
+
+@router.patch("/{device_id}/config/{section}")
+def patch_device_config(device_id: uuid.UUID, section: str, patch: dict,
+                        session: DBSession, rbac: RBAC, current: CurrentUser):
+    rbac.require("edit_devices", "write")
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404)
+    creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
+    result = get_adapter(device.adapter).apply_patch(device, creds, section, patch)
+    write_audit(session, "patch_config", current, "device", str(device_id), {"section": section})
+    session.commit()
+    return result
