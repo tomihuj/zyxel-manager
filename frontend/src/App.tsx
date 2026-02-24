@@ -9,6 +9,7 @@ import BulkActions from './pages/BulkActions'
 import Reports from './pages/Reports'
 import Users from './pages/Users'
 import DeviceConfig from './pages/DeviceConfig'
+import Compare from './pages/Compare'
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="bulk" element={<BulkActions />} />
         <Route path="reports" element={<Reports />} />
         <Route path="users" element={<Users />} />
+        <Route path="compare" element={<Compare />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

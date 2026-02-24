@@ -11,6 +11,7 @@ import FolderIcon from '@mui/icons-material/Folder'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import AssessmentIcon from '@mui/icons-material/Assessment'
 import PeopleIcon from '@mui/icons-material/People'
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
 import { useAuthStore } from '../store/auth'
 
 const DRAWER_WIDTH = 240
@@ -21,7 +22,8 @@ const NAV = [
   { label: 'Groups',      path: '/groups',  icon: <FolderIcon /> },
   { label: 'Bulk Actions',path: '/bulk',    icon: <PlayArrowIcon /> },
   { label: 'Reports',     path: '/reports', icon: <AssessmentIcon /> },
-  { label: 'Users & Roles',path: '/users', icon: <PeopleIcon /> },
+  { label: 'Users & Roles',path: '/users',   icon: <PeopleIcon /> },
+  { label: 'Compare',      path: '/compare', icon: <CompareArrowsIcon /> },
 ]
 
 export default function Layout() {

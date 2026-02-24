@@ -1,0 +1,291 @@
+import { useState } from 'react'
+import {
+  Box, Typography, Button, Chip, Card, Table, TableHead, TableRow, TableCell,
+  TableBody, CircularProgress, Alert, Select, MenuItem, FormControl, InputLabel,
+  Autocomplete, TextField, Switch, FormControlLabel,
+} from '@mui/material'
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
+import { useQuery } from '@tanstack/react-query'
+import { listDevices, getDeviceConfig } from '../api/devices'
+import type { Device } from '../types'
+
+const SECTIONS = [
+  'system', 'interfaces', 'routing', 'nat', 'nat_snat', 'firewall_rules',
+  'vpn', 'dns', 'ntp', 'address_objects', 'service_objects', 'users',
+]
+
+function sectionLabel(key: string) {
+  return key.replace(/^_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function findIdentityKey(items: any[]): string | null {
+  if (!items.length || typeof items[0] !== 'object') return null
+  for (const k of ['_Name', '_name', 'name', '_No_', '_no', 'no', 'id', '_id', '_Index', '_index']) {
+    if (k in items[0]) return k
+  }
+  return null
+}
+
+type CmpRow = { label: string; values: (string | null)[]; differs: boolean }
+
+function buildRows(section: string, deviceIds: string[], configs: Record<string, any>): CmpRow[] {
+  const rows: CmpRow[] = []
+  const perDevice = deviceIds.map(id => configs[id] ?? null)
+  const first = perDevice.find(d => d !== null && d !== undefined)
+  if (first === null || first === undefined) return rows
+
+  if (Array.isArray(first)) {
+    const identityKey = findIdentityKey(first)
+
+    if (identityKey) {
+      // Collect all unique identity values preserving order of first occurrence
+      const allIds: string[] = []
+      const seen = new Set<string>()
+      perDevice.forEach(d => {
+        if (!Array.isArray(d)) return
+        d.forEach(item => {
+          const v = String(item[identityKey] ?? '—')
+          if (!seen.has(v)) { seen.add(v); allIds.push(v) }
+        })
+      })
+
+      for (const idVal of allIds) {
+        const itemsPerDevice = perDevice.map(d =>
+          Array.isArray(d) ? (d.find(item => String(item[identityKey] ?? '—') === idVal) ?? null) : null
+        )
+
+        // Check if item is missing on any device
+        if (itemsPerDevice.some(item => item === null)) {
+          rows.push({
+            label: `${idVal}  ·  (exists)`,
+            values: itemsPerDevice.map(item => item === null ? null : '✓'),
+            differs: true,
+          })
+        }
+
+        // Collect flat field names in order
+        const fieldNames: string[] = []
+        const fieldSeen = new Set<string>()
+        itemsPerDevice.forEach(item => {
+          if (!item) return
+          Object.entries(item).forEach(([k, v]) => {
+            if (k === identityKey || fieldSeen.has(k)) return
+            if (Array.isArray(v) || (typeof v === 'object' && v !== null)) return
+            fieldSeen.add(k); fieldNames.push(k)
+          })
+        })
+
+        for (const field of fieldNames) {
+          const values = itemsPerDevice.map(item =>
+            item === null ? null : (item[field] == null ? '—' : String(item[field]))
+          )
+          const differs = new Set(values.map(v => v ?? '(missing)')).size > 1
+          rows.push({ label: `${idVal}  ·  ${sectionLabel(field)}`, values, differs })
+        }
+      }
+    } else {
+      // No identity key — compare by index
+      const maxLen = Math.max(...perDevice.map(d => Array.isArray(d) ? d.length : 0))
+      for (let i = 0; i < maxLen; i++) {
+        const values = perDevice.map(d =>
+          Array.isArray(d) && d[i] != null
+            ? (typeof d[i] === 'object' ? JSON.stringify(d[i]) : String(d[i]))
+            : null
+        )
+        const differs = new Set(values.map(v => v ?? '(missing)')).size > 1
+        rows.push({ label: `[${i}]`, values, differs })
+      }
+    }
+  } else if (typeof first === 'object' && first !== null) {
+    const allKeys: string[] = []
+    const keySeen = new Set<string>()
+    perDevice.forEach(d => {
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return
+      Object.entries(d).forEach(([k, v]) => {
+        if (keySeen.has(k)) return
+        if (Array.isArray(v) || (typeof v === 'object' && v !== null)) return
+        keySeen.add(k); allKeys.push(k)
+      })
+    })
+    for (const key of allKeys) {
+      const values = perDevice.map(d => d == null ? null : (d[key] == null ? '—' : String(d[key])))
+      const differs = new Set(values.map(v => v ?? '(missing)')).size > 1
+      rows.push({ label: sectionLabel(key), values, differs })
+    }
+  } else {
+    // scalar
+    const values = perDevice.map(d => d == null ? null : String(d))
+    const differs = new Set(values.map(v => v ?? '(missing)')).size > 1
+    rows.push({ label: sectionLabel(section), values, differs })
+  }
+
+  return rows
+}
+
+export default function Compare() {
+  const [selectedDevices, setSelectedDevices] = useState<Device[]>([])
+  const [section, setSection] = useState('interfaces')
+  const [configs, setConfigs] = useState<Record<string, any>>({})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [diffsOnly, setDiffsOnly] = useState(false)
+
+  const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
+
+  const handleCompare = async () => {
+    if (selectedDevices.length < 2) return
+    setLoading(true)
+    setError('')
+    setConfigs({})
+    try {
+      const results = await Promise.all(
+        selectedDevices.map(d => getDeviceConfig(d.id, section).then(data => ({ id: d.id, data })))
+      )
+      const map: Record<string, any> = {}
+      results.forEach(({ id, data }) => { map[id] = data })
+      setConfigs(map)
+    } catch (e: any) {
+      setError(e?.message || 'Failed to fetch configs')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const selectedIds = selectedDevices.map(d => d.id)
+  const rows = Object.keys(configs).length > 0 ? buildRows(section, selectedIds, configs) : []
+  const visibleRows = diffsOnly ? rows.filter(r => r.differs) : rows
+  const diffCount = rows.filter(r => r.differs).length
+
+  return (
+    <Box>
+      <Typography variant="h5" fontWeight={700} sx={{ mb: 3 }}>Compare</Typography>
+
+      <Card sx={{ p: 2, mb: 3 }}>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <Autocomplete
+            multiple
+            options={devices}
+            getOptionLabel={(d) => `${d.name} (${d.mgmt_ip})`}
+            value={selectedDevices}
+            onChange={(_, v) => setSelectedDevices(v)}
+            renderTags={(value, getTagProps) =>
+              value.map((d, i) => (
+                <Chip
+                  label={d.name}
+                  {...getTagProps({ index: i })}
+                  size="small"
+                  color={d.status === 'online' ? 'success' : 'default'}
+                />
+              ))
+            }
+            renderInput={(params) => (
+              <TextField {...params} label="Select devices (2 or more)" size="small" />
+            )}
+            sx={{ minWidth: 360, flex: 1 }}
+            limitTags={5}
+          />
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel>Section</InputLabel>
+            <Select value={section} label="Section" onChange={(e) => setSection(e.target.value)}>
+              {SECTIONS.map(s => (
+                <MenuItem key={s} value={s}>{sectionLabel(s)}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Button
+            variant="contained"
+            startIcon={loading ? undefined : <CompareArrowsIcon />}
+            onClick={handleCompare}
+            disabled={selectedDevices.length < 2 || loading}
+          >
+            {loading ? <CircularProgress size={18} sx={{ mr: 1 }} /> : null}
+            {loading ? 'Comparing…' : 'Compare'}
+          </Button>
+        </Box>
+      </Card>
+
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {rows.length > 0 && (
+        <>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+              <Typography variant="body2" color="text.secondary">
+                {rows.length} field{rows.length !== 1 ? 's' : ''}
+              </Typography>
+              {diffCount > 0
+                ? <Chip size="small" label={`${diffCount} difference${diffCount !== 1 ? 's' : ''}`} color="warning" />
+                : <Chip size="small" label="Identical" color="success" />
+              }
+            </Box>
+            <FormControlLabel
+              control={<Switch checked={diffsOnly} onChange={(e) => setDiffsOnly(e.target.checked)} size="small" />}
+              label="Differences only"
+              sx={{ mr: 0 }}
+            />
+          </Box>
+
+          <Card>
+            <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow sx={{ '& th': { fontWeight: 700, fontSize: 12, bgcolor: 'grey.50', borderBottom: 2, borderColor: 'divider' } }}>
+                    <TableCell sx={{ minWidth: 240, position: 'sticky', left: 0, bgcolor: 'grey.50', zIndex: 1 }}>
+                      Field
+                    </TableCell>
+                    {selectedDevices.map(d => (
+                      <TableCell key={d.id} sx={{ minWidth: 180 }}>
+                        <Typography fontWeight={700} fontSize={12}>{d.name}</Typography>
+                        <Typography fontSize={11} color="text.secondary">{d.mgmt_ip}</Typography>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {visibleRows.map((row, i) => (
+                    <TableRow
+                      key={i}
+                      sx={{
+                        bgcolor: row.differs ? 'warning.50' : undefined,
+                        '&:hover': { bgcolor: row.differs ? 'warning.100' : 'action.hover' },
+                      }}
+                    >
+                      <TableCell sx={{
+                        fontSize: 12,
+                        fontWeight: row.differs ? 600 : 400,
+                        color: row.differs ? 'warning.dark' : 'text.primary',
+                        position: 'sticky',
+                        left: 0,
+                        bgcolor: row.differs ? 'warning.50' : 'background.paper',
+                        zIndex: 1,
+                        borderRight: '1px solid',
+                        borderColor: 'divider',
+                      }}>
+                        {row.label}
+                      </TableCell>
+                      {row.values.map((val, j) => (
+                        <TableCell key={j} sx={{ fontSize: 12, fontFamily: 'monospace' }}>
+                          {val === null
+                            ? <Chip size="small" label="missing" color="error" variant="outlined" sx={{ fontSize: 11 }} />
+                            : val
+                          }
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                  {visibleRows.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={selectedDevices.length + 1} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: 13 }}>
+                        {diffsOnly ? 'No differences found — all values are identical.' : 'No data.'}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </Box>
+          </Card>
+        </>
+      )}
+    </Box>
+  )
+}
