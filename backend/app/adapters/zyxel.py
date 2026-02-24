@@ -385,6 +385,9 @@ class ZyxelAdapter(FirewallAdapter):
             logger.error("ZyxelAdapter.fetch_config: %s", e)
             raise
 
+    def restore_config(self, device, credentials: dict, config: dict) -> dict:
+        return {"success": False, "message": "Restore not yet supported for Zyxel adapter"}
+
     def apply_patch(self, device, credentials: dict, section: str, patch: dict) -> dict:
         """Apply a configuration patch via CLI commands (write=1).
 

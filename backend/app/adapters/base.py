@@ -21,3 +21,7 @@ class FirewallAdapter(ABC):
     def get_device_info(self, device, credentials: dict) -> dict:
         """Optional: returns firmware_version, serial_number, model, uptime_seconds."""
         return {}
+
+    def restore_config(self, device, credentials: dict, config: dict) -> dict:
+        """Push a full config dict to the device. Returns {success, message}."""
+        raise NotImplementedError("restore_config not supported by this adapter")

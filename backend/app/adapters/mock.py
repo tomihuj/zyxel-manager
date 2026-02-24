@@ -90,3 +90,8 @@ class MockAdapter(FirewallAdapter):
             "model": sys.get("model"),
             "uptime_seconds": random.randint(1000, 9_999_999),
         }
+
+    def restore_config(self, device, credentials: dict, config: dict) -> dict:
+        time.sleep(random.uniform(0.05, 0.15))
+        _device_states[str(device.id)] = copy.deepcopy(config)
+        return {"success": True, "message": "Configuration restored successfully"}
