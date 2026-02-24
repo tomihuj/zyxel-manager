@@ -11,7 +11,19 @@ import { listJobs, createJob, previewJob, executeJob } from '../api/bulk'
 const SECTIONS = ['ntp', 'dns', 'interfaces', 'routing', 'nat',
   'firewall_rules', 'vpn', 'address_objects', 'service_objects']
 
-const NTP_EXAMPLE = JSON.stringify({ servers: ['192.168.0.10', 'pool.ntp.org'] }, null, 2)
+const SECTION_TEMPLATES: Record<string, object> = {
+  ntp: { servers: ['192.168.0.10', 'pool.ntp.org'] },
+  dns: { primary: '8.8.8.8', secondary: '8.8.4.4', domain: 'example.com' },
+  interfaces: { eth0: { enabled: true, ip: '192.168.1.1', mask: '255.255.255.0', description: 'LAN' } },
+  routing: { default_gateway: '192.168.1.1', static_routes: [{ dest: '10.0.0.0/8', gw: '192.168.1.254' }] },
+  nat: { rules: [{ name: 'PAT_OUT', type: 'masquerade', outbound_interface: 'eth0' }] },
+  firewall_rules: { rules: [{ name: 'Allow_LAN_OUT', src_zone: 'LAN', dst_zone: 'WAN', action: 'allow' }] },
+  vpn: { tunnels: [{ name: 'HQ', type: 'ipsec', remote_ip: '203.0.113.1', psk: 'changeme' }] },
+  address_objects: { objects: [{ name: 'MGMT_SUBNET', type: 'subnet', ip: '10.0.0.0', mask: '255.255.255.0' }] },
+  service_objects: { objects: [{ name: 'CUSTOM_APP', protocol: 'tcp', port_start: 8080, port_end: 8090 }] },
+}
+
+const templateFor = (s: string) => JSON.stringify(SECTION_TEMPLATES[s] ?? {}, null, 2)
 
 export default function BulkActions() {
   const qc = useQueryClient()
@@ -21,7 +33,7 @@ export default function BulkActions() {
   const [step, setStep] = useState(0)
   const [selected, setSelected] = useState<string[]>([])
   const [section, setSection] = useState('ntp')
-  const [patchText, setPatchText] = useState(NTP_EXAMPLE)
+  const [patchText, setPatchText] = useState(templateFor('ntp'))
   const [jobName, setJobName] = useState('New Bulk Job')
   const [createdJobId, setCreatedJobId] = useState<string | null>(null)
   const [previews, setPreviews] = useState<any[]>([])
@@ -92,7 +104,7 @@ export default function BulkActions() {
           {step === 1 && (
             <Box>
               <TextField select label="Config Section" fullWidth margin="dense" value={section}
-                onChange={(e) => setSection(e.target.value)} sx={{ mb: 1 }}>
+                onChange={(e) => { setSection(e.target.value); setPatchText(templateFor(e.target.value)); setPatchError('') }} sx={{ mb: 1 }}>
                 {SECTIONS.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
               </TextField>
               <TextField label="Patch JSON" fullWidth multiline rows={8} margin="dense"

@@ -125,6 +125,74 @@ def delete_device(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current:
     write_audit(session, "delete_device", current, "device", str(device_id))
 
 
+@router.post("/{device_id}/diagnostics")
+def run_diagnostics(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
+    """Run three sequential diagnostic steps: TCP connect, login, data transfer."""
+    import socket, time
+    rbac.require("view_devices")
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404)
+    creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
+
+    steps = []
+
+    # ── Step 1: TCP / TLS connect ────────────────────────────────────────────
+    t0 = time.monotonic()
+    try:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((device.mgmt_ip, device.port), timeout=5) as sock:
+            with ctx.wrap_socket(sock, server_hostname=device.mgmt_ip):
+                pass
+        steps.append({"step": "TCP/TLS connect", "ok": True,
+                       "detail": f"Reached {device.mgmt_ip}:{device.port}",
+                       "latency_ms": round((time.monotonic() - t0) * 1000, 1)})
+    except Exception as exc:
+        steps.append({"step": "TCP/TLS connect", "ok": False,
+                       "detail": str(exc), "latency_ms": None})
+        return {"steps": steps}   # no point continuing
+
+    # ── Step 2: Login / authentication ──────────────────────────────────────
+    adapter = get_adapter(device.adapter)
+    login_attempts: list = []
+    t0 = time.monotonic()
+    try:
+        if hasattr(adapter, "diagnose_auth"):
+            login_attempts = adapter.diagnose_auth(device, creds)
+            success = any(a.get("success") for a in login_attempts)
+            detail = next((f"{a['method']} {a['url']}" for a in login_attempts if a.get("success")), "All strategies failed")
+        else:
+            result = adapter.test_connection(device, creds)
+            success = result.get("success", False)
+            detail = result.get("message", "")
+        steps.append({"step": "Login", "ok": success, "detail": detail,
+                       "latency_ms": round((time.monotonic() - t0) * 1000, 1),
+                       "login_attempts": login_attempts})
+    except Exception as exc:
+        steps.append({"step": "Login", "ok": False, "detail": str(exc),
+                       "latency_ms": None, "login_attempts": login_attempts})
+        return {"steps": steps}
+
+    if not steps[-1]["ok"]:
+        return {"steps": steps}
+
+    # ── Step 3: Data transfer (fetch NTP section) ───────────────────────────
+    t0 = time.monotonic()
+    try:
+        data = adapter.fetch_config(device, creds, section="ntp")
+        steps.append({"step": "Data transfer (ntp)", "ok": True,
+                       "detail": f"Received {len(str(data))} bytes",
+                       "latency_ms": round((time.monotonic() - t0) * 1000, 1)})
+    except Exception as exc:
+        steps.append({"step": "Data transfer (ntp)", "ok": False,
+                       "detail": str(exc), "latency_ms": None})
+
+    return {"steps": steps}
+
+
 @router.post("/{device_id}/test-connection")
 def test_connection(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
     rbac.require("view_devices")
