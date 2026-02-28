@@ -519,30 +519,465 @@ def check_ssl_vpn_without_ipsec(config: dict) -> Optional[FindingDict]:
 
 
 # ---------------------------------------------------------------------------
+# New checks — SNMP
+# ---------------------------------------------------------------------------
+
+def check_snmp_default_community(config: dict) -> Optional[FindingDict]:
+    """SNMP community string is the factory-default 'public' or 'private'."""
+    snmp = config.get("snmp", {})
+    if not snmp.get("enabled"):
+        return None
+    community = snmp.get("community", "")
+    if community.lower() in ("public", "private", ""):
+        return _finding(
+            category="authentication",
+            severity="critical",
+            title=f"SNMP default community string in use ('{community}')",
+            description=(
+                f"SNMP is enabled with the well-known community string '{community}'. "
+                "Any host on the network can read full device configuration and statistics, "
+                "and potentially write configuration if RW access is granted."
+            ),
+            recommendation=(
+                "Change the SNMP community string to a long, random value. "
+                "Restrict SNMP access to specific management hosts using an ACL. "
+                "Prefer SNMPv3 with authentication and encryption over v1/v2c."
+            ),
+            config_path="snmp.community",
+            compliance_refs='["CIS-FW-4.1", "NIST-IA-3", "ISO27001-A.9"]',
+        )
+    return None
+
+
+def check_snmp_v1v2_enabled(config: dict) -> Optional[FindingDict]:
+    """SNMPv1 or SNMPv2c is enabled — both lack encryption and strong auth."""
+    snmp = config.get("snmp", {})
+    if not snmp.get("enabled"):
+        return None
+    version = snmp.get("version", "").lower()
+    if version in ("v1", "v2c", "v2"):
+        return _finding(
+            category="weak_protocol",
+            severity="high",
+            title=f"SNMP {snmp.get('version')} enabled — no encryption or strong auth",
+            description=(
+                f"SNMP version {snmp.get('version')} is active. This version transmits "
+                "community strings and MIB data in plaintext, making it trivial to "
+                "intercept credentials with a network sniffer."
+            ),
+            recommendation=(
+                "Upgrade to SNMPv3 with authPriv security level (authentication + "
+                "AES encryption). Disable SNMPv1 and SNMPv2c entirely. "
+                "Restrict SNMP to a dedicated management VLAN."
+            ),
+            config_path="snmp.version",
+            compliance_refs='["CIS-FW-4.1", "NIST-SC-8", "ISO27001-A.13"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — IPS / threat prevention
+# ---------------------------------------------------------------------------
+
+def check_no_ips(config: dict) -> Optional[FindingDict]:
+    """Intrusion Prevention System is disabled."""
+    ips = config.get("ips", {})
+    if ips.get("enabled") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="high",
+            title="Intrusion Prevention System (IPS) disabled",
+            description=(
+                "The IPS engine is disabled. Without active intrusion prevention, "
+                "exploit attempts, malware command-and-control traffic, and known "
+                "attack signatures pass through the firewall uninspected."
+            ),
+            recommendation=(
+                "Enable IPS in prevention mode. Subscribe to Zyxel's signature feed "
+                "and schedule regular signature updates. Review and tune the default "
+                "profile to minimise false positives before enforcing block mode."
+            ),
+            config_path="ips.enabled",
+            compliance_refs='["CIS-FW-7.1", "NIST-SI-3", "ISO27001-A.12.6"]',
+        )
+    return None
+
+
+def check_no_content_filter(config: dict) -> Optional[FindingDict]:
+    """Web content filtering is disabled."""
+    cf = config.get("content_filter", {})
+    if cf.get("enabled") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="Web content filtering disabled",
+            description=(
+                "Web content filtering is not active. Users can reach malicious, "
+                "phishing, and policy-violating websites without restriction. "
+                "Drive-by downloads and watering-hole attacks are unmitigated."
+            ),
+            recommendation=(
+                "Enable web content filtering with at least malware and phishing "
+                "category blocks. Consider blocking uncategorised sites in "
+                "high-security environments."
+            ),
+            config_path="content_filter.enabled",
+            compliance_refs='["CIS-FW-7.2", "NIST-SC-7"]',
+        )
+    return None
+
+
+def check_no_app_patrol(config: dict) -> Optional[FindingDict]:
+    """Application patrol / deep packet inspection is disabled."""
+    ap = config.get("app_patrol", {})
+    if ap.get("enabled") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="Application patrol (deep packet inspection) disabled",
+            description=(
+                "Application patrol is disabled. Without DPI the firewall cannot "
+                "identify or control applications that tunnel over permitted ports "
+                "(e.g. P2P over port 80, or Shadow-IT SaaS applications)."
+            ),
+            recommendation=(
+                "Enable application patrol and configure a policy that blocks "
+                "high-risk application categories (P2P, anonymisers, remote-access "
+                "tools). Log all application activity for audit purposes."
+            ),
+            config_path="app_patrol.enabled",
+            compliance_refs='["NIST-SC-7", "ISO27001-A.13.1"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Logging
+# ---------------------------------------------------------------------------
+
+def check_no_remote_syslog(config: dict) -> Optional[FindingDict]:
+    """No remote syslog server configured."""
+    logging_cfg = config.get("logging", {})
+    if not logging_cfg.get("syslog_servers"):
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="No remote syslog server configured",
+            description=(
+                "Firewall logs are stored locally only. Local-only logs can be lost "
+                "if the device is compromised, rebooted, or its storage fills up. "
+                "Incident response and forensic analysis require centralised log retention."
+            ),
+            recommendation=(
+                "Configure at least one remote syslog server (e.g. a SIEM or syslog-ng "
+                "instance). Ensure logs are retained for at minimum 90 days per most "
+                "compliance frameworks. Protect the syslog channel with TLS if available."
+            ),
+            config_path="logging.syslog_servers",
+            compliance_refs='["CIS-FW-8.1", "NIST-AU-9", "ISO27001-A.12.4"]',
+        )
+    return None
+
+
+def check_log_level_too_high(config: dict) -> Optional[FindingDict]:
+    """Log level set to 'error' or 'critical' only — important events are missed."""
+    logging_cfg = config.get("logging", {})
+    level = logging_cfg.get("log_level", "").lower()
+    if level in ("error", "critical", "alert", "emergency"):
+        return _finding(
+            category="missing_hardening",
+            severity="low",
+            title=f"Log verbosity too low (level: {level})",
+            description=(
+                f"The logging level is set to '{level}'. Only the most severe events "
+                "are recorded. Denied connection attempts, policy violations, and "
+                "authentication failures will not appear in logs."
+            ),
+            recommendation=(
+                "Set the log level to 'warning' or 'info' to capture denied traffic, "
+                "authentication events, and policy hits. Review storage capacity "
+                "and rotate logs to a remote syslog server."
+            ),
+            config_path="logging.log_level",
+            compliance_refs='["NIST-AU-2", "ISO27001-A.12.4"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Dangerous service objects
+# ---------------------------------------------------------------------------
+
+def check_ftp_service(config: dict) -> Optional[FindingDict]:
+    """FTP service object (port 21) present — cleartext file transfer."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 21:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="FTP service object defined (port 21)",
+                description=(
+                    "A service object for FTP (TCP/21) is defined. FTP transmits "
+                    "credentials and file data in cleartext and is vulnerable to "
+                    "credential sniffing and man-in-the-middle attacks."
+                ),
+                recommendation=(
+                    "Replace FTP with SFTP (SSH file transfer, TCP/22) or FTPS "
+                    "(FTP over TLS, TCP/990). Remove the FTP service object and "
+                    "any firewall rules that permit it."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.1", "NIST-SC-8"]',
+            )
+    return None
+
+
+def check_rdp_service(config: dict) -> Optional[FindingDict]:
+    """RDP service object (port 3389) present."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 3389:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="RDP service object defined (port 3389)",
+                description=(
+                    "A service object for Remote Desktop Protocol (TCP/3389) is defined. "
+                    "RDP is one of the most frequently exploited remote access protocols "
+                    "and a top initial-access vector in ransomware campaigns."
+                ),
+                recommendation=(
+                    "Remove direct RDP exposure. Require RDP sessions to be established "
+                    "only over VPN. Enable Network Level Authentication (NLA) and "
+                    "consider a Remote Desktop Gateway to add MFA."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.3", "NIST-SC-7"]',
+            )
+    return None
+
+
+def check_smb_service(config: dict) -> Optional[FindingDict]:
+    """SMB service object (port 445) present."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 445:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="SMB service object defined (port 445)",
+                description=(
+                    "A service object for SMB (TCP/445) is defined. Publicly reachable "
+                    "SMB is the attack vector for EternalBlue (MS17-010/WannaCry) and "
+                    "numerous other critical exploits. SMB should never be internet-facing."
+                ),
+                recommendation=(
+                    "Block SMB at the perimeter unconditionally. Remove this service "
+                    "object or ensure no firewall rule allows it from untrusted zones. "
+                    "Internal SMB traffic should traverse only trusted network segments."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.4", "NIST-SC-7", "ISO27001-A.13.1"]',
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Session and password hardening
+# ---------------------------------------------------------------------------
+
+def check_no_login_timeout(config: dict) -> Optional[FindingDict]:
+    """Admin session idle timeout is zero (disabled)."""
+    timeout = config.get("system", {}).get("login_timeout_minutes", None)
+    if timeout is not None and int(timeout) == 0:
+        return _finding(
+            category="authentication",
+            severity="medium",
+            title="Admin session idle timeout disabled",
+            description=(
+                "The management session timeout is set to 0 (disabled). "
+                "Unattended admin sessions remain active indefinitely, giving an "
+                "attacker physical or network access a permanent foothold."
+            ),
+            recommendation=(
+                "Set the idle session timeout to 10–15 minutes for interactive "
+                "management sessions. Apply this to both web UI and SSH access."
+            ),
+            config_path="system.login_timeout_minutes",
+            compliance_refs='["CIS-FW-5.3", "NIST-AC-11", "ISO27001-A.9.4"]',
+        )
+    return None
+
+
+def check_no_account_lockout(config: dict) -> Optional[FindingDict]:
+    """No account lockout threshold configured (brute-force protection absent)."""
+    threshold = config.get("users", {}).get("lockout_threshold", None)
+    if threshold is not None and int(threshold) == 0:
+        return _finding(
+            category="authentication",
+            severity="medium",
+            title="No account lockout threshold configured",
+            description=(
+                "Account lockout is disabled (threshold = 0). Without a lockout "
+                "policy, brute-force and credential-stuffing attacks against the "
+                "management interface can run indefinitely without automatic blocking."
+            ),
+            recommendation=(
+                "Set the account lockout threshold to 5–10 failed attempts and a "
+                "lockout duration of at least 15 minutes. Monitor lockout events "
+                "and alert on repeated lockouts as indicators of attack."
+            ),
+            config_path="users.lockout_threshold",
+            compliance_refs='["CIS-FW-5.4", "NIST-AC-7", "ISO27001-A.9.4"]',
+        )
+    return None
+
+
+def check_no_password_policy(config: dict) -> Optional[FindingDict]:
+    """No password complexity policy defined."""
+    policy = config.get("users", {}).get("password_policy", None)
+    if policy is None:
+        return _finding(
+            category="authentication",
+            severity="medium",
+            title="No password complexity policy configured",
+            description=(
+                "No password policy is enforced. Users and administrators can set "
+                "trivially guessable passwords with no minimum length, complexity, "
+                "or rotation requirements."
+            ),
+            recommendation=(
+                "Define a password policy requiring a minimum of 12 characters, "
+                "mixed case, digits, and special characters. Enforce password "
+                "rotation every 90 days for privileged accounts."
+            ),
+            config_path="users.password_policy",
+            compliance_refs='["CIS-FW-5.5", "NIST-IA-5", "ISO27001-A.9.4"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Network-level hardening
+# ---------------------------------------------------------------------------
+
+def check_no_anti_spoofing(config: dict) -> Optional[FindingDict]:
+    """Anti-IP-spoofing protection is disabled."""
+    fw_settings = config.get("firewall_settings", {})
+    if fw_settings.get("anti_spoofing") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="Anti-IP-spoofing protection disabled",
+            description=(
+                "Anti-spoofing (reverse-path forwarding / unicast RPF) is disabled. "
+                "Attackers can send packets with forged source addresses, bypassing "
+                "ACL restrictions and making attribution difficult."
+            ),
+            recommendation=(
+                "Enable anti-spoofing on all WAN-facing interfaces. "
+                "Configure strict RPF on interfaces where routing is deterministic, "
+                "and loose RPF on asymmetric routing paths."
+            ),
+            config_path="firewall_settings.anti_spoofing",
+            compliance_refs='["CIS-FW-1.4", "NIST-SC-7", "BCP38"]',
+        )
+    return None
+
+
+def check_no_syn_flood_protection(config: dict) -> Optional[FindingDict]:
+    """SYN flood (DoS) protection is disabled."""
+    fw_settings = config.get("firewall_settings", {})
+    if fw_settings.get("syn_flood_protection") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="SYN flood protection disabled",
+            description=(
+                "SYN flood protection (SYN cookies / half-open connection limiting) "
+                "is disabled. A SYN flood attack can exhaust the TCP connection table "
+                "and render the firewall and downstream services unavailable."
+            ),
+            recommendation=(
+                "Enable SYN flood protection on WAN-facing interfaces. "
+                "Configure appropriate thresholds for half-open connections and "
+                "SYN packet rate limiting. Test thresholds under normal load first."
+            ),
+            config_path="firewall_settings.syn_flood_protection",
+            compliance_refs='["CIS-FW-1.5", "NIST-SC-5"]',
+        )
+    return None
+
+
+def check_auto_update_disabled(config: dict) -> Optional[FindingDict]:
+    """Automatic firmware/signature update check is disabled."""
+    if config.get("system", {}).get("auto_update_check") is False:
+        return _finding(
+            category="firmware",
+            severity="low",
+            title="Automatic update check disabled",
+            description=(
+                "The device does not automatically check for firmware or signature "
+                "updates. Security patches and IPS/content-filter signature updates "
+                "will not be applied unless triggered manually."
+            ),
+            recommendation=(
+                "Enable automatic update checks so the device notifies administrators "
+                "when new firmware is available. Schedule signature updates (IPS, "
+                "content filter) on at least a daily cadence."
+            ),
+            config_path="system.auto_update_check",
+            compliance_refs='["CIS-FW-6.2", "NIST-SI-2"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 ALL_CHECKS = [
+    # Permissive rules
     check_wan_to_lan_allow,
     check_no_deny_by_default,
+    check_any_to_any_allow,
+    check_disabled_rules_present,
+    # Exposed services
     check_telnet_service,
     check_http_wan_reachable,
+    check_ftp_service,
+    check_rdp_service,
+    check_smb_service,
+    # Authentication
     check_default_admin_username,
-    check_any_to_any_allow,
+    check_multiple_admin_accounts,
+    check_no_login_timeout,
+    check_no_account_lockout,
+    check_no_password_policy,
+    check_snmp_default_community,
+    # Weak protocols
     check_no_vpn,
+    check_ssl_vpn_without_ipsec,
+    check_snmp_v1v2_enabled,
+    # Missing hardening
     check_ntp_disabled,
     check_no_ntp_servers,
     check_single_dns,
     check_single_ntp,
-    check_multiple_admin_accounts,
-    check_disabled_rules_present,
     check_no_static_routes,
-    check_old_firmware_v5,
     check_nat_snat_default,
     check_no_address_objects,
     check_default_hostname,
     check_public_dns_servers,
-    check_ssl_vpn_without_ipsec,
+    check_no_ips,
+    check_no_content_filter,
+    check_no_app_patrol,
+    check_no_remote_syslog,
+    check_log_level_too_high,
+    check_no_anti_spoofing,
+    check_no_syn_flood_protection,
+    # Firmware
+    check_old_firmware_v5,
+    check_auto_update_disabled,
 ]
 
 

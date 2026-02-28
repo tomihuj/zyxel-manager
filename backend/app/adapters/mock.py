@@ -14,6 +14,8 @@ _MOCK_CONFIG_TEMPLATE = {
         "firmware": "V5.37(ABFY.1)",
         "serial": "S220Z12345678",
         "model": "USG FLEX 100",
+        "login_timeout_minutes": 0,
+        "auto_update_check": False,
     },
     "interfaces": [
         {"name": "wan1", "type": "ethernet", "ip": "203.0.113.1", "mask": "255.255.255.0"},
@@ -40,7 +42,32 @@ _MOCK_CONFIG_TEMPLATE = {
         {"name": "HTTP", "protocol": "tcp", "port": 80},
         {"name": "HTTPS", "protocol": "tcp", "port": 443},
     ],
-    "users": {"local_accounts": [{"username": "admin", "role": "admin"}]},
+    "users": {
+        "local_accounts": [{"username": "admin", "role": "admin"}],
+        "password_policy": None,
+        "lockout_threshold": 0,
+        "remote_auth": {"enabled": False},
+    },
+    "snmp": {
+        "enabled": True,
+        "version": "v2c",
+        "community": "public",
+        "trap_host": None,
+    },
+    "ips": {"enabled": False, "mode": "detection"},
+    "content_filter": {"enabled": False},
+    "app_patrol": {"enabled": False},
+    "logging": {
+        "syslog_servers": [],
+        "local_logging": True,
+        "log_level": "warning",
+    },
+    "firewall_settings": {
+        "anti_spoofing": False,
+        "syn_flood_protection": False,
+        "icmp_flood_protection": False,
+        "port_scan_detection": False,
+    },
 }
 
 _device_states: dict = {}
@@ -58,12 +85,15 @@ def _get_state(device_id: str) -> dict:
 
 class MockAdapter(FirewallAdapter):
 
-    def test_connection(self, device, credentials: dict) -> dict:
-        time.sleep(random.uniform(0.05, 0.15))
+    def test_connection(self, device, credentials: dict, timeout: int = 5) -> dict:
+        # Mock adapter simulates a reachable device — no real TCP check needed.
+        t0 = time.monotonic()
+        time.sleep(random.uniform(0.02, 0.12))
+        latency = round((time.monotonic() - t0) * 1000, 1)
         return {
             "success": True,
-            "message": f"Mock connection to {device.mgmt_ip}:{device.port} successful",
-            "latency_ms": round(random.uniform(5, 50), 1),
+            "message": f"Mock: connected to {device.mgmt_ip}:{device.port} ({latency} ms)",
+            "latency_ms": latency,
         }
 
     def fetch_config(self, device, credentials: dict, section: str = "full") -> dict:
