@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   Box, Drawer, AppBar, Toolbar, Typography, List, ListItem,
@@ -15,22 +15,47 @@ import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
 import BackupIcon from '@mui/icons-material/Backup'
 import ArticleIcon from '@mui/icons-material/Article'
 import BugReportIcon from '@mui/icons-material/BugReport'
+import LayersIcon from '@mui/icons-material/Layers'
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
+import FactCheckIcon from '@mui/icons-material/FactCheck'
+import SearchIcon from '@mui/icons-material/Search'
+import BarChartIcon from '@mui/icons-material/BarChart'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
+import DarkModeIcon from '@mui/icons-material/DarkMode'
+import LightModeIcon from '@mui/icons-material/LightMode'
+import SettingsIcon from '@mui/icons-material/Settings'
+import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt'
+import SecurityIcon from '@mui/icons-material/Security'
 import { useAuthStore } from '../store/auth'
 import { useDiagStore } from '../store/diag'
+import { useThemeStore } from '../store/theme'
 import DiagPanel from './DiagPanel'
+import Toaster from './Toaster'
+import NotificationCenter from './NotificationCenter'
+import KeyboardShortcuts from './KeyboardShortcuts'
+import CommandPalette from './CommandPalette'
 
 const DRAWER_WIDTH = 240
 
 const NAV = [
-  { label: 'Dashboard',   path: '/',       icon: <DashboardIcon /> },
-  { label: 'Devices',     path: '/devices', icon: <RouterIcon /> },
-  { label: 'Groups',      path: '/groups',  icon: <FolderIcon /> },
-  { label: 'Bulk Actions',path: '/bulk',    icon: <PlayArrowIcon /> },
-  { label: 'Reports',     path: '/reports', icon: <AssessmentIcon /> },
-  { label: 'Users & Roles',path: '/users',   icon: <PeopleIcon /> },
-  { label: 'Compare',      path: '/compare', icon: <CompareArrowsIcon /> },
-  { label: 'Backups',      path: '/backups', icon: <BackupIcon /> },
-  { label: 'Logs',         path: '/logs',    icon: <ArticleIcon /> },
+  { label: 'Dashboard',    path: '/',              icon: <DashboardIcon /> },
+  { label: 'Devices',      path: '/devices',       icon: <RouterIcon /> },
+  { label: 'Groups',       path: '/groups',        icon: <FolderIcon /> },
+  { label: 'Bulk Actions', path: '/bulk',          icon: <PlayArrowIcon /> },
+  { label: 'Reports',      path: '/reports',       icon: <AssessmentIcon /> },
+  { label: 'Users & Roles',path: '/users',         icon: <PeopleIcon /> },
+  { label: 'Compare',      path: '/compare',       icon: <CompareArrowsIcon /> },
+  { label: 'Backups',      path: '/backups',       icon: <BackupIcon /> },
+  { label: 'Templates',    path: '/templates',     icon: <LayersIcon /> },
+  { label: 'Logs',         path: '/logs',          icon: <ArticleIcon /> },
+  { label: 'Alerts',       path: '/alerts',        icon: <NotificationsActiveIcon /> },
+  { label: 'Compliance',   path: '/compliance',    icon: <FactCheckIcon /> },
+  { label: 'Security Advisor', path: '/security', icon: <SecurityIcon /> },
+  { label: 'Config Search',path: '/config-search', icon: <SearchIcon /> },
+  { label: 'Metrics',      path: '/metrics',       icon: <BarChartIcon /> },
+  { label: 'Topology',     path: '/topology',      icon: <AccountTreeIcon /> },
+  { label: 'Firmware',     path: '/firmware',      icon: <SystemUpdateAltIcon /> },
+  { label: 'Settings',     path: '/settings',      icon: <SettingsIcon /> },
 ]
 
 export default function Layout() {
@@ -38,7 +63,20 @@ export default function Layout() {
   const location = useLocation()
   const { user, clearAuth } = useAuthStore()
   const { enabled: diagEnabled, toggle: toggleDiag } = useDiagStore()
+  const { darkMode, toggle: toggleDark } = useThemeStore()
   const [anchor, setAnchor] = useState<null | HTMLElement>(null)
+  const [cmdOpen, setCmdOpen] = useState(false)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setCmdOpen((v) => !v)
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [])
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -48,6 +86,12 @@ export default function Layout() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 700 }}>
             Zyxel Manager
           </Typography>
+          <NotificationCenter />
+          <Tooltip title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+            <IconButton onClick={toggleDark} color="inherit">
+              {darkMode ? <LightModeIcon /> : <DarkModeIcon />}
+            </IconButton>
+          </Tooltip>
           <Tooltip title={diagEnabled ? 'Disable Diagnostic Mode' : 'Enable Diagnostic Mode'}>
             <IconButton onClick={toggleDiag} color="inherit" sx={{ opacity: diagEnabled ? 1 : 0.5 }}>
               <BugReportIcon />
@@ -103,6 +147,9 @@ export default function Layout() {
           <Outlet />
         </Box>
       )}
+      <Toaster />
+      <KeyboardShortcuts />
+      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
     </Box>
   )
 }
