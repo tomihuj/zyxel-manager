@@ -82,14 +82,29 @@ def check_wan_to_lan_allow(config: dict) -> Optional[FindingDict]:
 def check_no_deny_by_default(config: dict) -> Optional[FindingDict]:
     """No explicit deny-all / default-deny rule present."""
     rules = config.get("firewall_rules", [])
-    has_deny_all = any(
-        r.get("action", "").lower() == "deny"
-        and r.get("src_zone", "").upper() in ("ANY", "WAN")
-        and r.get("dst_zone", "").upper() in ("ANY", "LAN")
-        and r.get("enabled", True)
-        for r in rules
-    )
-    if not has_deny_all:
+
+    # Zone names that mean "all traffic" (any representation)
+    _WILD = {"ANY", "ALL", "*", ""}
+
+    def _is_deny_default(r: dict) -> bool:
+        if r.get("action", "").lower() != "deny":
+            return False
+        if not r.get("enabled", True):
+            return False
+        src = r.get("src_zone", "").upper()
+        dst = r.get("dst_zone", "").upper()
+        # Catch-all: ANY/ALL → ANY/ALL
+        if src in _WILD and dst in _WILD:
+            return True
+        # WAN (or wildcard) → LAN (or wildcard): covers the most important direction
+        if src in (_WILD | {"WAN"}) and dst in (_WILD | {"LAN"}):
+            return True
+        # WAN (or wildcard) → ANY destination: blocks all inbound WAN traffic
+        if src in (_WILD | {"WAN"}) and dst in _WILD:
+            return True
+        return False
+
+    if not any(_is_deny_default(r) for r in rules):
         return _finding(
             category="permissive_rule",
             severity="critical",
