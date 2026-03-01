@@ -20,12 +20,14 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import SettingsIcon from '@mui/icons-material/Settings'
 import {
   listFindings, suppressFinding, reopenFinding, remediateFinding,
   listScans, triggerScan, listScores, getSecuritySummary, getFindingContext,
 } from '../api/security'
 import { listDevices } from '../api/devices'
 import { useToastStore } from '../store/toast'
+import { useParameterSetsStore, extractConfigRows, cellStr } from '../store/parameterSets'
 import type { SecurityFinding, SecurityScan } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -280,37 +282,8 @@ function FindingContextDialog({
   const section = data?.section
   const config = data?.config
 
-  // Columns for firewall / secure-policy rules (Zyxel field name → display label)
-  const RULE_COLUMNS: { key: string; label: string }[] = [
-    { key: '__name',           label: 'Priority' },
-    { key: '_name',            label: 'Name' },
-    { key: '_description',     label: 'Description' },
-    { key: '_user',            label: 'User' },
-    { key: '_schedule',        label: 'Schedule' },
-    { key: '_from',            label: 'From' },
-    { key: '_to',              label: 'To' },
-    { key: '_source_IP',       label: 'IPv4 Source' },
-    { key: '_source_port',     label: 'Source Port' },
-    { key: '_destination_IP',  label: 'IPv4 Destination' },
-    { key: '_service',         label: 'Service' },
-    { key: '_device',          label: 'Device' },
-    { key: '_log',             label: 'LOG' },
-  ]
-
-  function extractRules(raw: Record<string, unknown>): Record<string, unknown>[] | null {
-    // Real Zyxel adapter wraps rules in a _secure_policy_rule key
-    const wrapped = raw['_secure_policy_rule']
-    if (Array.isArray(wrapped)) return wrapped as Record<string, unknown>[]
-    // Mock adapter or direct array
-    if (Array.isArray(raw)) return raw as Record<string, unknown>[]
-    return null
-  }
-
-  function cellVal(v: unknown): string {
-    if (v === null || v === undefined || v === '') return '—'
-    if (typeof v === 'object') return JSON.stringify(v)
-    return String(v)
-  }
+  const { getSetForSection } = useParameterSetsStore()
+  const paramSet = section ? getSetForSection(section) : undefined
 
   function renderConfig() {
     if (!config) return null
@@ -322,22 +295,33 @@ function FindingContextDialog({
       )
     }
 
-    // ── Firewall rules: render as a structured table ──────────────────────
-    const rules = extractRules(config as Record<string, unknown>)
-    if (rules !== null) {
-      if (rules.length === 0) {
-        return <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>No rules found.</Typography>
+    // ── Attempt to extract rows (handles Zyxel [{_secure_policy_rule:[...]}, ...] wrapper) ──
+    const rows = extractConfigRows(config)
+
+    if (rows !== null) {
+      if (rows.length === 0) {
+        return <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>No entries found in this section.</Typography>
       }
-      // Only show columns that have at least one non-empty value in the data
-      const visibleCols = RULE_COLUMNS.filter((col) =>
-        rules.some((r) => r[col.key] !== undefined && r[col.key] !== null && r[col.key] !== '')
-      )
+
+      // Collect all keys present in the data
+      const allKeys = Array.from(new Set(rows.flatMap((r) => Object.keys(r))))
+
+      // Build column list from parameter set (visible only) + any extra keys not covered
+      const psCols = paramSet ? paramSet.columns.filter((c) => c.visible && allKeys.includes(c.key)) : []
+      const psKeys = new Set(psCols.map((c) => c.key))
+      const extraKeys = allKeys.filter((k) => !psKeys.has(k))
+
+      const cols: { key: string; label: string }[] = [
+        ...psCols.map((c) => ({ key: c.key, label: c.label })),
+        ...extraKeys.map((k) => ({ key: k, label: k })),
+      ]
+
       return (
-        <TableContainer component={Paper} variant="outlined" sx={{ mt: 1, maxHeight: 400 }}>
+        <TableContainer component={Paper} variant="outlined" sx={{ mt: 1, maxHeight: 420 }}>
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {visibleCols.map((col) => (
+                {cols.map((col) => (
                   <TableCell key={col.key} sx={{ fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12 }}>
                     {col.label}
                   </TableCell>
@@ -345,11 +329,11 @@ function FindingContextDialog({
               </TableRow>
             </TableHead>
             <TableBody>
-              {rules.map((rule, i) => (
+              {rows.map((row, i) => (
                 <TableRow key={i} hover>
-                  {visibleCols.map((col) => (
+                  {cols.map((col) => (
                     <TableCell key={col.key} sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                      {cellVal(rule[col.key])}
+                      {cellStr(row[col.key])}
                     </TableCell>
                   ))}
                 </TableRow>
@@ -360,7 +344,7 @@ function FindingContextDialog({
       )
     }
 
-    // ── Everything else: key-value cards ──────────────────────────────────
+    // ── Non-array section: key-value cards ────────────────────────────────
     const items: unknown[] = Array.isArray(config) ? config : [config]
     if (items.length === 0) {
       return <Typography variant="body2" color="text.secondary">No entries in this section.</Typography>
@@ -370,14 +354,17 @@ function FindingContextDialog({
         {items.map((item, i) => (
           <Box key={i} sx={{ p: 1.5, borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
             {typeof item === 'object' && item !== null
-              ? Object.entries(item as Record<string, unknown>).map(([k, v]) => (
-                <Box key={k} sx={{ display: 'flex', gap: 1, mb: 0.25, flexWrap: 'wrap' }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 160, flexShrink: 0 }}>{k}</Typography>
-                  <Typography variant="caption" fontWeight={600} fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>
-                    {cellVal(v)}
-                  </Typography>
-                </Box>
-              ))
+              ? Object.entries(item as Record<string, unknown>).map(([k, v]) => {
+                const label = paramSet?.columns.find((c) => c.key === k)?.label ?? k
+                return (
+                  <Box key={k} sx={{ display: 'flex', gap: 1, mb: 0.25, flexWrap: 'wrap' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ minWidth: 160, flexShrink: 0 }}>{label}</Typography>
+                    <Typography variant="caption" fontWeight={600} fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>
+                      {cellStr(v)}
+                    </Typography>
+                  </Box>
+                )
+              })
               : <Typography variant="caption" fontFamily="monospace">{String(item)}</Typography>
             }
           </Box>
@@ -477,14 +464,24 @@ function FindingContextDialog({
             {/* Live config section */}
             <Divider />
             <Box>
-              <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-                Active Configuration
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                <Typography variant="subtitle2" fontWeight={700}>
+                  Active Configuration
+                </Typography>
                 {section && (
-                  <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                    (section: <code>{section}</code>)
+                  <Typography variant="caption" color="text.secondary">
+                    section: <code>{section}</code>
                   </Typography>
                 )}
-              </Typography>
+                {paramSet && (
+                  <Chip label={paramSet.name} size="small" variant="outlined" sx={{ fontSize: 11 }} />
+                )}
+                <Tooltip title="Manage field labels in Settings → Parameter Sets">
+                  <IconButton size="small" sx={{ ml: 'auto' }} onClick={() => { onClose(); setTimeout(() => window.location.assign('/settings'), 100) }}>
+                    <SettingsIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
               {isLoading
                 ? <CircularProgress size={20} />
                 : renderConfig()

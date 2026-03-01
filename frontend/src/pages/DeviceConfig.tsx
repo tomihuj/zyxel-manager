@@ -1,17 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Box, Typography, Tabs, Tab, Button, CircularProgress,
+  Box, Typography, Tabs, Tab, Button, CircularProgress, ToggleButton, ToggleButtonGroup,
   Alert, Snackbar, Breadcrumbs, Link, Paper, Chip, Divider, List, ListItem, ListItemText,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import SaveIcon from '@mui/icons-material/Save'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import FactCheckIcon from '@mui/icons-material/FactCheck'
+import TableChartIcon from '@mui/icons-material/TableChart'
+import CodeIcon from '@mui/icons-material/Code'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDeviceConfig, patchDeviceConfig } from '../api/devices'
 import { api } from '../api/client'
+import { useParameterSetsStore, extractConfigRows, cellStr } from '../store/parameterSets'
 
 const SECTIONS = [
   'system', 'interfaces', 'routing', 'nat', 'firewall_rules',
@@ -178,6 +182,59 @@ function CheckResultPanel({ result }: { result: CheckResult }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Table view component
+// ---------------------------------------------------------------------------
+
+function ConfigTableView({
+  rows,
+  paramSet,
+}: {
+  rows: Record<string, unknown>[]
+  paramSet: ReturnType<ReturnType<typeof useParameterSetsStore>['getSetForSection']>
+}) {
+  // All keys present in the data
+  const allKeys = Array.from(new Set(rows.flatMap((r) => Object.keys(r))))
+
+  // Visible param set columns that exist in data, then extra keys not in param set
+  const psCols = paramSet ? paramSet.columns.filter((c) => c.visible && allKeys.includes(c.key)) : []
+  const psKeys = new Set(psCols.map((c) => c.key))
+  const extraKeys = allKeys.filter((k) => !psKeys.has(k))
+
+  const cols: { key: string; label: string }[] = [
+    ...psCols.map((c) => ({ key: c.key, label: c.label })),
+    ...extraKeys.map((k) => ({ key: k, label: k })),
+  ]
+
+  return (
+    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 520 }}>
+      <Table size="small" stickyHeader>
+        <TableHead>
+          <TableRow>
+            {cols.map((col) => (
+              <TableCell key={col.key} sx={{ fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12 }}>
+                {col.label}
+              </TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((row, i) => (
+            <TableRow key={i} hover>
+              {cols.map((col) => (
+                <TableCell key={col.key} sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                  {cellStr(row[col.key])}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  )
+}
+
+
 export default function DeviceConfig() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -187,6 +244,9 @@ export default function DeviceConfig() {
   const [snack, setSnack] = useState('')
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null)
   const [checked, setChecked] = useState(false)
+  const [viewMode, setViewMode] = useState<'json' | 'table'>('json')
+
+  const { getSetForSection } = useParameterSetsStore()
 
   const { data: device } = useQuery({
     queryKey: ['device', id],
@@ -207,10 +267,11 @@ export default function DeviceConfig() {
     }
   }, [config, section])
 
-  // Clear check state when switching tabs
+  // Clear check state and view mode when switching tabs
   useEffect(() => {
     setCheckResult(null)
     setChecked(false)
+    setViewMode('json')
   }, [section])
 
   const saveMut = useMutation({
@@ -298,37 +359,70 @@ export default function DeviceConfig() {
         <Box sx={{ p: 2 }}>
           {isLoading && <CircularProgress size={24} />}
           {isError && <Alert severity="error">Failed to load config section.</Alert>}
-          {!isLoading && !isDirty && (
-            <Alert severity="info" sx={{ mb: 1 }}>No unsaved changes</Alert>
-          )}
-          {!isLoading && isDirty && !checked && (
-            <Alert severity="warning" sx={{ mb: 1 }}>Unsaved changes — click Check before saving</Alert>
-          )}
-          {!isLoading && checked && (
-            <Alert severity="success" sx={{ mb: 1 }} icon={<CheckCircleIcon fontSize="small" />}>
-              Config checked — ready to save
-            </Alert>
-          )}
-          {!isLoading && (
-            <textarea
-              value={draft}
-              onChange={(e) => handleDraftChange(e.target.value)}
-              style={{
-                width: '100%',
-                minHeight: 420,
-                fontFamily: 'monospace',
-                fontSize: 13,
-                padding: 12,
-                border: '1px solid #ddd',
-                borderRadius: 4,
-                resize: 'vertical',
-                boxSizing: 'border-box',
-                background: '#fafafa',
-              }}
-              spellCheck={false}
-            />
-          )}
-          {checkResult && <CheckResultPanel result={checkResult} />}
+
+          {!isLoading && (() => {
+            const rows = extractConfigRows(config)
+            const paramSet = getSetForSection(section)
+            const canTable = rows !== null && rows.length > 0
+
+            return (
+              <>
+                {/* View mode toggle — only when table view is possible */}
+                {canTable && (
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+                    <ToggleButtonGroup
+                      size="small"
+                      exclusive
+                      value={viewMode}
+                      onChange={(_, v) => { if (v) setViewMode(v) }}
+                    >
+                      <ToggleButton value="json" sx={{ px: 1.5, textTransform: 'none', fontSize: 12 }}>
+                        <CodeIcon sx={{ fontSize: 15, mr: 0.5 }} /> JSON
+                      </ToggleButton>
+                      <ToggleButton value="table" sx={{ px: 1.5, textTransform: 'none', fontSize: 12 }}>
+                        <TableChartIcon sx={{ fontSize: 15, mr: 0.5 }} />
+                        Table{paramSet ? ` (${paramSet.name})` : ''}
+                      </ToggleButton>
+                    </ToggleButtonGroup>
+                  </Box>
+                )}
+
+                {viewMode === 'table' && canTable ? (
+                  <ConfigTableView rows={rows!} paramSet={paramSet} />
+                ) : (
+                  <>
+                    {!isDirty && <Alert severity="info" sx={{ mb: 1 }}>No unsaved changes</Alert>}
+                    {isDirty && !checked && (
+                      <Alert severity="warning" sx={{ mb: 1 }}>Unsaved changes — click Check before saving</Alert>
+                    )}
+                    {checked && (
+                      <Alert severity="success" sx={{ mb: 1 }} icon={<CheckCircleIcon fontSize="small" />}>
+                        Config checked — ready to save
+                      </Alert>
+                    )}
+                    <textarea
+                      value={draft}
+                      onChange={(e) => handleDraftChange(e.target.value)}
+                      style={{
+                        width: '100%',
+                        minHeight: 420,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        padding: 12,
+                        border: '1px solid #ddd',
+                        borderRadius: 4,
+                        resize: 'vertical',
+                        boxSizing: 'border-box',
+                        background: '#fafafa',
+                      }}
+                      spellCheck={false}
+                    />
+                    {checkResult && <CheckResultPanel result={checkResult} />}
+                  </>
+                )}
+              </>
+            )
+          })()}
         </Box>
       </Paper>
 
