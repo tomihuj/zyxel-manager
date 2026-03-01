@@ -279,7 +279,6 @@ function FindingContextDialog({
   const section = data?.section
   const config = data?.config
 
-  // Render config as a nicely formatted section-aware view
   function renderConfig() {
     if (!config) return null
     if ((config as any)._error) {
@@ -290,51 +289,44 @@ function FindingContextDialog({
       )
     }
 
-    // For list-type sections (firewall_rules, nat, service_objects, etc.) render a table-like view
-    if (Array.isArray(config)) {
-      if (config.length === 0) {
-        return <Typography variant="body2" color="text.secondary">No entries in this section.</Typography>
-      }
-      return (
-        <Stack spacing={0.75} sx={{ mt: 1 }}>
-          {(config as Record<string, unknown>[]).map((item, i) => (
-            <Box
-              key={i}
-              sx={{
-                p: 1.5, borderRadius: 1, border: '1px solid',
-                borderColor: 'divider', bgcolor: 'background.paper',
-                fontFamily: 'monospace', fontSize: 12,
-                display: 'flex', flexWrap: 'wrap', gap: 1,
-              }}
-            >
-              {Object.entries(item).map(([k, v]) => (
-                <Box key={k}>
-                  <Typography component="span" variant="caption" color="text.secondary">{k}: </Typography>
-                  <Typography component="span" variant="caption" fontWeight={600}>
-                    {v === null ? 'null' : v === true ? 'true' : v === false ? 'false' : String(v)}
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-          ))}
-        </Stack>
-      )
+    const items: unknown[] = Array.isArray(config) ? config : [config]
+    if (items.length === 0) {
+      return <Typography variant="body2" color="text.secondary">No entries in this section.</Typography>
     }
 
-    // For object sections, render key-value pairs
+    // Render each top-level item (rule, object, etc.) as its own card with key-value rows
     return (
-      <Box
-        component="pre"
-        sx={{
-          mt: 1, p: 1.5, borderRadius: 1, border: '1px solid',
-          borderColor: 'divider', bgcolor: 'action.hover',
-          fontSize: 12, fontFamily: 'monospace',
-          overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-          maxHeight: 300, overflowY: 'auto',
-        }}
-      >
-        {JSON.stringify(config, null, 2)}
-      </Box>
+      <Stack spacing={0.75} sx={{ mt: 1 }}>
+        {items.map((item, i) => (
+          <Box
+            key={i}
+            sx={{
+              p: 1.5, borderRadius: 1, border: '1px solid',
+              borderColor: 'divider', bgcolor: 'background.paper',
+            }}
+          >
+            {typeof item === 'object' && item !== null
+              ? Object.entries(item as Record<string, unknown>).map(([k, v]) => (
+                <Box key={k} sx={{ display: 'flex', gap: 1, mb: 0.25, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 160, flexShrink: 0 }}>
+                    {k}
+                  </Typography>
+                  <Typography variant="caption" fontWeight={600} fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>
+                    {v === null || v === undefined
+                      ? <Typography component="span" variant="caption" color="text.disabled">null</Typography>
+                      : typeof v === 'object'
+                        ? JSON.stringify(v)
+                        : String(v)}
+                  </Typography>
+                </Box>
+              ))
+              : (
+                <Typography variant="caption" fontFamily="monospace">{String(item)}</Typography>
+              )
+            }
+          </Box>
+        ))}
+      </Stack>
     )
   }
 
