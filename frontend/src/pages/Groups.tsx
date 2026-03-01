@@ -7,6 +7,7 @@ import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listGroups, createGroup, deleteGroup } from '../api/groups'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 export default function Groups() {
   const qc = useQueryClient()
@@ -14,14 +15,15 @@ export default function Groups() {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: '', description: '' })
   const [snack, setSnack] = useState('')
+  const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const createMut = useMutation({
     mutationFn: () => createGroup(form),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['groups'] }); setOpen(false); setForm({ name: '', description: '' }); setSnack('Group created') },
   })
   const deleteMut = useMutation({
-    mutationFn: deleteGroup,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['groups'] }); setSnack('Group deleted') },
+    mutationFn: () => deleteGroup(deleteId!),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['groups'] }); setDeleteId(null); setSnack('Group deleted') },
   })
 
   return (
@@ -37,7 +39,7 @@ export default function Groups() {
               secondaryAction={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Chip size="small" label={`${g.device_count} device${g.device_count !== 1 ? 's' : ''}`} />
-                  <IconButton edge="end" color="error" size="small" onClick={() => deleteMut.mutate(g.id)}>
+                  <IconButton edge="end" color="error" size="small" onClick={() => setDeleteId(g.id)}>
                     <DeleteIcon fontSize="small" />
                   </IconButton>
                 </Box>
@@ -66,6 +68,15 @@ export default function Groups() {
           <Button variant="contained" onClick={() => createMut.mutate()} disabled={!form.name}>Create</Button>
         </DialogActions>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteId}
+        title="Delete Group"
+        message="This will delete the group. Devices will not be affected."
+        onConfirm={() => deleteMut.mutate()}
+        onClose={() => setDeleteId(null)}
+        loading={deleteMut.isPending}
+      />
 
       <Snackbar open={!!snack} autoHideDuration={3000} onClose={() => setSnack('')} message={snack}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />

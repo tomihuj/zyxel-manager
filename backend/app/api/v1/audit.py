@@ -1,8 +1,11 @@
+import csv
+import io
 import json
 from datetime import datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -113,6 +116,52 @@ def get_action_configs(session: DBSession, current: SuperUser):
             "log_payload": cfg.log_payload if cfg else False,
         })
     return result
+
+
+@router.get("/export")
+def export_audit_logs(
+    session: DBSession,
+    current: SuperUser,
+    action: Optional[str] = None,
+    username: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    format: str = Query(default="csv", regex="^(csv|json)$"),
+):
+    """Export audit logs as CSV or JSON."""
+    stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(10000)
+    if action:
+        stmt = stmt.where(AuditLog.action == action)
+    if username:
+        stmt = stmt.where(AuditLog.username == username)
+    if date_from:
+        stmt = stmt.where(AuditLog.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(AuditLog.created_at <= date_to)
+
+    logs = [_log_dict(l) for l in session.exec(stmt).all()]
+
+    if format == "json":
+        content = json.dumps(logs, indent=2, default=str)
+        return StreamingResponse(
+            iter([content]),
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=audit_logs.json"},
+        )
+
+    # CSV export
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["id", "username", "action", "resource_type",
+                                                  "resource_id", "ip_address", "created_at"])
+    writer.writeheader()
+    for log in logs:
+        writer.writerow({k: log.get(k, "") for k in writer.fieldnames})
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=audit_logs.csv"},
+    )
 
 
 @router.put("/actions/{action}")

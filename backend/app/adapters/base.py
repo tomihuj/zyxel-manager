@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 class FirewallAdapter(ABC):
 
     @abstractmethod
-    def test_connection(self, device, credentials: dict) -> dict:
+    def test_connection(self, device, credentials: dict, timeout: int = 5) -> dict:
         """Returns: {success: bool, message: str, latency_ms: float|None}"""
 
     @abstractmethod

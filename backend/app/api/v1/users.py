@@ -61,10 +61,15 @@ def create_user(body: UserCreate, session: DBSession, current: SuperUser):
     session.add(user)
     session.commit()
     session.refresh(user)
-    write_audit(session, "create_user", current, "user", str(user.id))
-    return {"id": str(user.id), "email": user.email, "username": user.username,
+    resp = {"id": str(user.id), "email": user.email, "username": user.username,
             "full_name": user.full_name, "is_active": user.is_active,
-            "is_superuser": user.is_superuser, "created_at": user.created_at}
+            "is_superuser": user.is_superuser, "created_at": str(user.created_at)}
+    write_audit(session, "create_user", current, "user", str(user.id),
+                request_body={"email": body.email, "username": body.username,
+                              "full_name": body.full_name, "is_superuser": body.is_superuser,
+                              "password": body.password},
+                response_body=resp)
+    return resp
 
 
 @router.get("/{user_id}")
@@ -96,9 +101,13 @@ def update_user(user_id: uuid.UUID, body: UserUpdate, session: DBSession, curren
     session.add(user)
     session.commit()
     session.refresh(user)
-    return {"id": str(user.id), "email": user.email, "username": user.username,
+    resp = {"id": str(user.id), "email": user.email, "username": user.username,
             "full_name": user.full_name, "is_active": user.is_active,
-            "is_superuser": user.is_superuser, "created_at": user.created_at}
+            "is_superuser": user.is_superuser, "created_at": str(user.created_at)}
+    write_audit(session, "update_user", current, "user", str(user_id),
+                request_body=body.model_dump(exclude_none=True),
+                response_body=resp)
+    return resp
 
 
 @router.delete("/{user_id}", status_code=204)
@@ -106,6 +115,8 @@ def delete_user(user_id: uuid.UUID, session: DBSession, current: SuperUser):
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404)
+    write_audit(session, "delete_user", current, "user", str(user_id),
+                request_body={"user_id": str(user_id), "username": user.username})
     session.delete(user)
     session.commit()
 
@@ -125,6 +136,8 @@ def assign_role(user_id: uuid.UUID, role_id: uuid.UUID, session: DBSession, curr
     if not session.get(UserRole, {"user_id": user_id, "role_id": role_id}):
         session.add(UserRole(user_id=user_id, role_id=role_id))
         session.commit()
+    write_audit(session, "assign_role", current, "user", str(user_id),
+                request_body={"user_id": str(user_id), "role_id": str(role_id)})
 
 
 @router.delete("/{user_id}/roles/{role_id}", status_code=204)
@@ -133,6 +146,8 @@ def remove_role(user_id: uuid.UUID, role_id: uuid.UUID, session: DBSession, curr
     if link:
         session.delete(link)
         session.commit()
+    write_audit(session, "remove_role", current, "user", str(user_id),
+                request_body={"user_id": str(user_id), "role_id": str(role_id)})
 
 
 # ── Roles (nested under /users for routing simplicity) ────────────────────────
@@ -150,8 +165,23 @@ def create_role(body: RoleCreate, session: DBSession, current: SuperUser):
     session.add(role)
     session.commit()
     session.refresh(role)
-    return {"id": str(role.id), "name": role.name, "description": role.description,
-            "created_at": role.created_at}
+    resp = {"id": str(role.id), "name": role.name, "description": role.description,
+            "created_at": str(role.created_at)}
+    write_audit(session, "create_role", current, "role", str(role.id),
+                request_body={"name": body.name, "description": body.description},
+                response_body=resp)
+    return resp
+
+
+@router.delete("/roles/{role_id}", status_code=204)
+def delete_role(role_id: uuid.UUID, session: DBSession, current: SuperUser):
+    role = session.get(Role, role_id)
+    if not role:
+        raise HTTPException(status_code=404)
+    write_audit(session, "delete_role", current, "role", str(role_id),
+                request_body={"role_id": str(role_id), "name": role.name})
+    session.delete(role)
+    session.commit()
 
 
 @router.get("/roles/{role_id}/permissions")
@@ -169,3 +199,6 @@ def set_permissions(role_id: uuid.UUID, perms: List[PermissionSchema],
     for p in perms:
         session.add(Permission(role_id=role_id, **p.dict()))
     session.commit()
+    write_audit(session, "set_permissions", current, "role", str(role_id),
+                request_body={"role_id": str(role_id),
+                              "permissions": [p.dict() for p in perms]})

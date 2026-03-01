@@ -5,11 +5,15 @@ import {
   DialogContent, DialogActions, TextField, MenuItem, Snackbar, Tooltip, Card,
   Table, TableHead, TableRow, TableCell, TableBody, CircularProgress, Alert,
   Collapse, InputAdornment, Accordion, AccordionSummary, AccordionDetails,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, Select, FormControl, InputLabel,
 } from '@mui/material'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import AddIcon from '@mui/icons-material/Add'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
+import DifferenceIcon from '@mui/icons-material/Difference'
 import DeleteIcon from '@mui/icons-material/Delete'
+import RestoreIcon from '@mui/icons-material/Restore'
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
 import WifiIcon from '@mui/icons-material/Wifi'
 import SyncIcon from '@mui/icons-material/Sync'
 import SettingsIcon from '@mui/icons-material/Settings'
@@ -25,10 +29,16 @@ import DescriptionIcon from '@mui/icons-material/Description'
 import DownloadIcon from '@mui/icons-material/Download'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import TableRowsIcon from '@mui/icons-material/TableRows'
+import SearchIcon from '@mui/icons-material/Search'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listDevices, createDevice, updateDevice, deleteDevice, testConnection, syncDevice, getDeviceConfig } from '../api/devices'
+import { listDevices, listDeletedDevices, createDevice, updateDevice, deleteDevice, restoreDevice, permanentDeleteDevice, testConnection, syncDevice, getDeviceConfig } from '../api/devices'
+import { listGroups } from '../api/groups'
 import { api } from '../api/client'
 import type { Device } from '../types'
+import { useFilterStore } from '../store/filters'
+import { useSettingsStore } from '../store/settings'
+import { useColumnWidthsStore } from '../store/columnWidths'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 function sectionLabel(key: string) {
   return key.replace(/^_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -171,15 +181,32 @@ function ConfigTable({ data }: { data: Record<string, any> }) {
   )
 }
 
+const LABEL_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280']
+
 const defaultForm = {
   name: '', model: 'USG FLEX 100', mgmt_ip: '', port: 443,
   protocol: 'https', adapter: 'mock', username: 'admin', password: '', tags: '',
+  notes: '', label_color: '',
 }
 
 export default function Devices() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data: devices = [], isLoading } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
+  const { data: devices = [], isLoading } = useQuery({
+    queryKey: ['devices'],
+    queryFn: listDevices,
+    refetchInterval: 30_000,
+  })
+  const { data: groups = [] } = useQuery({ queryKey: ['groups'], queryFn: listGroups })
+
+  const {
+    deviceSearch, deviceStatus, deviceGroupId,
+    setDeviceSearch, setDeviceStatus, setDeviceGroupId, resetDeviceFilters,
+  } = useFilterStore()
+  const { testConnectionTimeout } = useSettingsStore()
+  const { widths: savedWidths, setWidth } = useColumnWidthsStore()
+  const colWidths = savedWidths['devices'] ?? {}
+
   const [open, setOpen] = useState(false)
   const [snack, setSnack] = useState('')
   const [form, setForm] = useState(defaultForm)
@@ -195,6 +222,49 @@ export default function Devices() {
   const [configLoading, setConfigLoading] = useState(false)
   const [configError, setConfigError] = useState('')
   const [configView, setConfigView] = useState<'accordion' | 'table'>('accordion')
+  const [deleteDeviceId, setDeleteDeviceId] = useState<string | null>(null)
+  const [csvImportOpen, setCsvImportOpen] = useState(false)
+  const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [csvResult, setCsvResult] = useState<{ created: number; errors: { row: number; error: string }[] } | null>(null)
+  const [csvLoading, setCsvLoading] = useState(false)
+  const [showDeleted, setShowDeleted] = useState(false)
+  const [permanentDeleteId, setPermanentDeleteId] = useState<string | null>(null)
+
+  const { data: deletedDevices = [] } = useQuery({
+    queryKey: ['devices-deleted'],
+    queryFn: listDeletedDevices,
+    enabled: showDeleted,
+    refetchInterval: showDeleted ? 30_000 : false,
+  })
+
+  const restoreMut = useMutation({
+    mutationFn: (id: string) => restoreDevice(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      qc.invalidateQueries({ queryKey: ['devices-deleted'] })
+      setSnack('Device restored')
+    },
+    onError: () => setSnack('Failed to restore device'),
+  })
+
+  const permanentDeleteMut = useMutation({
+    mutationFn: (id: string) => permanentDeleteDevice(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices-deleted'] })
+      setPermanentDeleteId(null)
+      setSnack('Device permanently deleted')
+    },
+    onError: () => setSnack('Failed to permanently delete device'),
+  })
+
+  // Derived filtered devices
+  const filteredDevices = devices.filter((d) => {
+    if (deviceSearch && !d.name.toLowerCase().includes(deviceSearch.toLowerCase()) &&
+        !d.mgmt_ip.includes(deviceSearch)) return false
+    if (deviceStatus !== 'all' && d.status !== deviceStatus) return false
+    if (deviceGroupId && !d.group_ids?.includes(deviceGroupId)) return false
+    return true
+  })
 
   const ef = (k: string, v: unknown) => setEditForm((p) => ({ ...p, [k]: v }))
 
@@ -210,6 +280,8 @@ export default function Devices() {
       username: '',   // never pre-fill credentials
       password: '',
       tags: (device.tags as string[]).join(', '),
+      notes: device.notes ?? '',
+      label_color: device.label_color ?? '',
     })
   }
 
@@ -218,6 +290,8 @@ export default function Devices() {
       ...editForm,
       port: Number(editForm.port),
       tags: editForm.tags.split(',').map((t) => t.trim()).filter(Boolean),
+      notes: editForm.notes || null,
+      label_color: editForm.label_color || null,
       // only send credentials if user typed something
       ...(editForm.username ? { username: editForm.username } : {}),
       ...(editForm.password ? { password: editForm.password } : {}),
@@ -267,45 +341,107 @@ export default function Devices() {
     mutationFn: () => createDevice({
       ...form, port: Number(form.port),
       tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
+      notes: form.notes || null,
+      label_color: form.label_color || null,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setOpen(false); setForm(defaultForm); setSnack('Device created') },
     onError: () => setSnack('Failed to create device'),
   })
   const deleteMut = useMutation({
-    mutationFn: deleteDevice,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setSnack('Device deleted') },
+    mutationFn: () => deleteDevice(deleteDeviceId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      setDeleteDeviceId(null)
+      setSnack('Device deleted')
+    },
   })
   const testMut = useMutation({
-    mutationFn: testConnection,
-    onSuccess: (d) => { qc.invalidateQueries({ queryKey: ['devices'] }); setSnack((d as any).message) },
+    mutationFn: (id: string) => testConnection(id, testConnectionTimeout),
+    onSuccess: (d) => { qc.invalidateQueries({ queryKey: ['devices'] }); setSnack((d as any).message ?? 'Done') },
+    onError: (e: any) => setSnack(e?.response?.data?.detail ?? 'Connection test failed'),
   })
   const syncMut = useMutation({
     mutationFn: syncDevice,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setSnack('Config synced') },
+    onError: (e: any) => setSnack(e?.response?.data?.detail ?? 'Sync failed'),
   })
 
+  // Apply any saved column widths (drops flex when a saved width exists)
+  const applyWidth = (col: GridColDef<Device>): GridColDef<Device> => {
+    const saved = colWidths[col.field]
+    if (saved === undefined) return col
+    const { flex, ...rest } = col as any
+    return { ...rest, width: saved }
+  }
+
   const columns: GridColDef<Device>[] = [
-    { field: 'name', headerName: 'Name', flex: 1, minWidth: 140 },
-    { field: 'model', headerName: 'Model', width: 130 },
-    { field: 'mgmt_ip', headerName: 'IP / FQDN', width: 140 },
-    { field: 'adapter', headerName: 'Adapter', width: 90 },
-    {
+    applyWidth({
+      field: 'name', headerName: 'Name', flex: 1, minWidth: 140,
+      renderCell: (p) => {
+        const credsAge = p.row.credentials_updated_at
+          ? Math.floor((Date.now() - new Date(p.row.credentials_updated_at).getTime()) / 86_400_000)
+          : null
+        const credWarn = credsAge !== null && credsAge > 90
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, width: '100%' }}>
+            {p.row.label_color && (
+              <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: p.row.label_color, flexShrink: 0 }} />
+            )}
+            <Typography variant="body2" noWrap>{p.value as string}</Typography>
+            {credWarn && (
+              <Tooltip title={`Credentials last updated ${credsAge}d ago — consider rotating`}>
+                <Chip size="small" label="Creds" color="warning" sx={{ fontSize: 10, height: 18 }} />
+              </Tooltip>
+            )}
+          </Box>
+        )
+      },
+    }),
+    applyWidth({ field: 'model', headerName: 'Model', width: 130 }),
+    applyWidth({ field: 'mgmt_ip', headerName: 'IP / FQDN', width: 140 }),
+    applyWidth({ field: 'adapter', headerName: 'Adapter', width: 90 }),
+    applyWidth({
       field: 'tags', headerName: 'Tags', width: 160,
       renderCell: (p) => (
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
           {(p.value as string[])?.map((t: string) => <Chip key={t} label={t} size="small" />)}
         </Box>
       ),
-    },
-    {
-      field: 'status', headerName: 'Status', width: 100,
+    }),
+    applyWidth({
+      field: 'status', headerName: 'Status', width: 170,
       renderCell: (p) => (
-        <Chip size="small" label={p.value}
-          color={p.value === 'online' ? 'success' : p.value === 'offline' ? 'error' : 'default'} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{
+            width: 8, height: 8, borderRadius: '50%',
+            bgcolor: p.value === 'online' ? 'success.main' : p.value === 'offline' ? 'error.main' : 'grey.400',
+            '@keyframes pulse': {
+              '0%': { opacity: 1 },
+              '50%': { opacity: 0.35 },
+              '100%': { opacity: 1 },
+            },
+            ...(p.value === 'online' ? { animation: 'pulse 2s ease-in-out infinite' } : {}),
+          }} />
+          <Chip size="small" label={p.value}
+            color={p.value === 'online' ? 'success' : p.value === 'offline' ? 'error' : 'default'} />
+          {p.row.drift_detected && (
+            <Tooltip title={`Config drift detected${p.row.drift_detected_at ? ` at ${new Date(p.row.drift_detected_at).toLocaleString()}` : ''}`}>
+              <Chip
+                size="small"
+                icon={<DifferenceIcon fontSize="small" />}
+                label="Drift"
+                sx={{ bgcolor: 'orange', color: 'white', '& .MuiChip-icon': { color: 'white' } }}
+              />
+            </Tooltip>
+          )}
+        </Box>
       ),
-    },
-    { field: 'firmware_version', headerName: 'Firmware', width: 130 },
-    {
+    }),
+    applyWidth({
+      field: 'firmware_version', headerName: 'Firmware', width: 130,
+      valueGetter: (v) => v ?? '—',
+    }),
+    applyWidth({
       field: 'actions', headerName: '', width: 196, sortable: false,
       renderCell: (p) => (
         <Box>
@@ -316,10 +452,22 @@ export default function Devices() {
             <IconButton size="small" onClick={() => openEdit(p.row)}><EditIcon fontSize="small" /></IconButton>
           </Tooltip>
           <Tooltip title="Test connection">
-            <IconButton size="small" onClick={() => testMut.mutate(p.row.id)}><WifiIcon fontSize="small" /></IconButton>
+            <IconButton size="small"
+              onClick={() => testMut.mutate(p.row.id)}
+              disabled={testMut.isPending && testMut.variables === p.row.id}>
+              {testMut.isPending && testMut.variables === p.row.id
+                ? <CircularProgress size={14} />
+                : <WifiIcon fontSize="small" />}
+            </IconButton>
           </Tooltip>
           <Tooltip title="Sync config">
-            <IconButton size="small" onClick={() => syncMut.mutate(p.row.id)}><SyncIcon fontSize="small" /></IconButton>
+            <IconButton size="small"
+              onClick={() => syncMut.mutate(p.row.id)}
+              disabled={syncMut.isPending && syncMut.variables === p.row.id}>
+              {syncMut.isPending && syncMut.variables === p.row.id
+                ? <CircularProgress size={14} />
+                : <SyncIcon fontSize="small" />}
+            </IconButton>
           </Tooltip>
           <Tooltip title="Diagnostics">
             <IconButton size="small" onClick={() => { setDiagDevice(p.row); setDiagSteps([]); diagMut.mutate(p.row.id) }}><BugReportIcon fontSize="small" /></IconButton>
@@ -328,22 +476,80 @@ export default function Devices() {
             <IconButton size="small" onClick={() => openConfig(p.row)}><DescriptionIcon fontSize="small" /></IconButton>
           </Tooltip>
           <Tooltip title="Delete">
-            <IconButton size="small" color="error" onClick={() => deleteMut.mutate(p.row.id)}><DeleteIcon fontSize="small" /></IconButton>
+            <IconButton size="small" color="error" onClick={() => setDeleteDeviceId(p.row.id)}><DeleteIcon fontSize="small" /></IconButton>
           </Tooltip>
         </Box>
       ),
-    },
+    }),
   ]
+
+  const hasFilters = deviceSearch || deviceStatus !== 'all' || deviceGroupId
 
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" fontWeight={700}>Devices</Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>Add Device</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" startIcon={<UploadFileIcon />} onClick={() => { setCsvFile(null); setCsvResult(null); setCsvImportOpen(true) }}>
+            Import CSV
+          </Button>
+          <Button variant="outlined" color="warning" startIcon={<DeleteIcon />} onClick={() => setShowDeleted(true)}>
+            Deleted Devices
+          </Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>Add Device</Button>
+        </Box>
       </Box>
+
+      {/* Filter toolbar */}
+      <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+        <TextField
+          size="small"
+          placeholder="Search name or IP…"
+          value={deviceSearch}
+          onChange={(e) => setDeviceSearch(e.target.value)}
+          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+          sx={{ minWidth: 220 }}
+        />
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>Status</InputLabel>
+          <Select
+            value={deviceStatus}
+            label="Status"
+            onChange={(e) => setDeviceStatus(e.target.value as any)}
+          >
+            <MenuItem value="all">All statuses</MenuItem>
+            <MenuItem value="online">Online</MenuItem>
+            <MenuItem value="offline">Offline</MenuItem>
+            <MenuItem value="unknown">Unknown</MenuItem>
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 160 }}>
+          <InputLabel>Group</InputLabel>
+          <Select
+            value={deviceGroupId}
+            label="Group"
+            onChange={(e) => setDeviceGroupId(e.target.value)}
+          >
+            <MenuItem value="">All groups</MenuItem>
+            {groups.map((g) => (
+              <MenuItem key={g.id} value={g.id}>{g.name}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        {hasFilters && (
+          <Button size="small" onClick={resetDeviceFilters}>Clear Filters</Button>
+        )}
+        {hasFilters && (
+          <Typography variant="body2" color="text.secondary">
+            {filteredDevices.length} of {devices.length} devices
+          </Typography>
+        )}
+      </Box>
+
       <Card>
-        <DataGrid rows={devices} columns={columns} loading={isLoading} autoHeight
-          getRowId={(r) => r.id} pageSizeOptions={[25, 50]} sx={{ border: 0 }} />
+        <DataGrid rows={filteredDevices} columns={columns} loading={isLoading} autoHeight
+          getRowId={(r) => r.id} pageSizeOptions={[25, 50]} sx={{ border: 0 }}
+          onColumnWidthChange={(params) => setWidth('devices', params.colDef.field, params.width)} />
       </Card>
 
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
@@ -378,6 +584,30 @@ export default function Devices() {
             )}} />
           <TextField label="Tags (comma-separated)" fullWidth margin="dense" value={form.tags}
             onChange={(e) => f('tags', e.target.value)} helperText="e.g. prod, branch, hq" />
+          <TextField label="Notes" fullWidth margin="dense" multiline rows={2} value={form.notes}
+            onChange={(e) => f('notes', e.target.value)} helperText="Optional internal notes" />
+          <Box sx={{ mt: 1, mb: 0.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+              Label Color
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              <Box
+                onClick={() => f('label_color', '')}
+                sx={{
+                  width: 24, height: 24, borderRadius: '50%', cursor: 'pointer',
+                  bgcolor: 'grey.300', border: !form.label_color ? '3px solid' : '2px solid transparent',
+                  borderColor: !form.label_color ? 'primary.main' : 'transparent',
+                }}
+              />
+              {LABEL_COLORS.map((c) => (
+                <Box key={c} onClick={() => f('label_color', c)} sx={{
+                  width: 24, height: 24, borderRadius: '50%', cursor: 'pointer', bgcolor: c,
+                  border: form.label_color === c ? '3px solid' : '2px solid transparent',
+                  borderColor: form.label_color === c ? 'primary.main' : 'transparent',
+                }} />
+              ))}
+            </Box>
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
@@ -416,6 +646,30 @@ export default function Devices() {
             )}} />
           <TextField label="Tags (comma-separated)" fullWidth margin="dense" value={editForm.tags}
             onChange={(e) => ef('tags', e.target.value)} helperText="e.g. prod, branch, hq" />
+          <TextField label="Notes" fullWidth margin="dense" multiline rows={2} value={editForm.notes}
+            onChange={(e) => ef('notes', e.target.value)} helperText="Optional internal notes" />
+          <Box sx={{ mt: 1, mb: 0.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+              Label Color
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              <Box
+                onClick={() => ef('label_color', '')}
+                sx={{
+                  width: 24, height: 24, borderRadius: '50%', cursor: 'pointer',
+                  bgcolor: 'grey.300', border: !editForm.label_color ? '3px solid' : '2px solid transparent',
+                  borderColor: !editForm.label_color ? 'primary.main' : 'transparent',
+                }}
+              />
+              {LABEL_COLORS.map((c) => (
+                <Box key={c} onClick={() => ef('label_color', c)} sx={{
+                  width: 24, height: 24, borderRadius: '50%', cursor: 'pointer', bgcolor: c,
+                  border: editForm.label_color === c ? '3px solid' : '2px solid transparent',
+                  borderColor: editForm.label_color === c ? 'primary.main' : 'transparent',
+                }} />
+              ))}
+            </Box>
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditDevice(null)}>Cancel</Button>
@@ -552,6 +806,149 @@ export default function Devices() {
           <Button onClick={() => setConfigDevice(null)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Delete confirm ── */}
+      <ConfirmDialog
+        open={!!deleteDeviceId}
+        title="Delete Device"
+        message="Are you sure you want to delete this device? All associated config snapshots will also be removed."
+        onConfirm={() => deleteMut.mutate()}
+        onClose={() => setDeleteDeviceId(null)}
+        loading={deleteMut.isPending}
+      />
+
+      {/* ── CSV Import dialog ── */}
+      <Dialog open={csvImportOpen} onClose={() => setCsvImportOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Import Devices from CSV</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Upload a CSV file with columns: <code>name, mgmt_ip, model, adapter, port, protocol, username, password</code>.
+            Only <code>name</code> and <code>mgmt_ip</code> are required.
+          </Typography>
+          <Button variant="outlined" component="label" startIcon={<UploadFileIcon />}>
+            {csvFile ? csvFile.name : 'Choose CSV file'}
+            <input
+              type="file"
+              accept=".csv"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null
+                setCsvFile(f)
+                setCsvResult(null)
+              }}
+            />
+          </Button>
+          {csvResult && (
+            <Box sx={{ mt: 2 }}>
+              <Alert severity={csvResult.errors.length === 0 ? 'success' : 'warning'}>
+                Created {csvResult.created} device{csvResult.created !== 1 ? 's' : ''}.
+                {csvResult.errors.length > 0 && ` ${csvResult.errors.length} row(s) failed.`}
+              </Alert>
+              {csvResult.errors.length > 0 && (
+                <Box component="ul" sx={{ mt: 1, fontSize: 13 }}>
+                  {csvResult.errors.map((e) => (
+                    <li key={e.row}>Row {e.row}: {e.error}</li>
+                  ))}
+                </Box>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCsvImportOpen(false)}>
+            {csvResult ? 'Close' : 'Cancel'}
+          </Button>
+          {!csvResult && (
+            <Button
+              variant="contained"
+              disabled={!csvFile || csvLoading}
+              onClick={async () => {
+                if (!csvFile) return
+                setCsvLoading(true)
+                try {
+                  const formData = new FormData()
+                  formData.append('file', csvFile)
+                  const resp = await api.post('/devices/import', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                  })
+                  setCsvResult(resp.data)
+                  qc.invalidateQueries({ queryKey: ['devices'] })
+                } catch (e: any) {
+                  setSnack(e?.response?.data?.detail ?? 'Import failed')
+                } finally {
+                  setCsvLoading(false)
+                }
+              }}
+            >
+              {csvLoading ? <CircularProgress size={18} /> : 'Import'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* Deleted Devices Dialog */}
+      <Dialog open={showDeleted} onClose={() => setShowDeleted(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Deleted Devices</DialogTitle>
+        <DialogContent>
+          {deletedDevices.length === 0 ? (
+            <Alert severity="info">No deleted devices.</Alert>
+          ) : (
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ '& th': { fontWeight: 600 } }}>
+                  <TableCell>Name</TableCell>
+                  <TableCell>IP</TableCell>
+                  <TableCell>Model</TableCell>
+                  <TableCell>Deleted</TableCell>
+                  <TableCell align="right">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {deletedDevices.map((d) => (
+                  <TableRow key={d.id}>
+                    <TableCell>{d.name}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace' }}>{d.mgmt_ip}</TableCell>
+                    <TableCell>{d.model}</TableCell>
+                    <TableCell>{d.deleted_at ? new Date(d.deleted_at).toLocaleString() : '—'}</TableCell>
+                    <TableCell align="right">
+                      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                        <Tooltip title="Restore">
+                          <IconButton size="small" color="success"
+                            onClick={() => restoreMut.mutate(d.id)}
+                            disabled={restoreMut.isPending}>
+                            <RestoreIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Permanently Delete">
+                          <IconButton size="small" color="error"
+                            onClick={() => setPermanentDeleteId(d.id)}>
+                            <DeleteForeverIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowDeleted(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirm permanent delete */}
+      <ConfirmDialog
+        open={!!permanentDeleteId}
+        title="Permanently Delete Device"
+        message="This will permanently delete the device and all its data (snapshots, metrics, etc.). This cannot be undone."
+        confirmLabel="Delete Forever"
+        confirmColor="error"
+        onConfirm={() => permanentDeleteMut.mutate(permanentDeleteId!)}
+        onClose={() => setPermanentDeleteId(null)}
+        loading={permanentDeleteMut.isPending}
+      />
 
       <Snackbar open={!!snack} autoHideDuration={3000} onClose={() => setSnack('')}
         message={snack} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />

@@ -52,5 +52,20 @@ class Device(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True)),
     )
+    drift_detected: bool = Field(default=False)
+    drift_detected_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    notes: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    label_color: Optional[str] = Field(default=None, max_length=16)
+    credentials_updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    deleted_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(sa.DateTime(timezone=True), nullable=True),
+    )
     groups: List[DeviceGroup] = Relationship(back_populates="devices", link_model=GroupMembership)
     snapshots: List["ConfigSnapshot"] = Relationship(back_populates="device")

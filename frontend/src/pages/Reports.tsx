@@ -6,15 +6,13 @@ import {
 import DownloadIcon from '@mui/icons-material/Download'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { listGroups } from '../api/groups'
-import { generateReport, listAuditLogs } from '../api/reports'
-import type { AuditLog } from '../types'
+import { generateReport } from '../api/reports'
 
 const ALL_SECTIONS = ['interfaces', 'routing', 'nat', 'firewall_rules', 'vpn',
   'users', 'dns', 'ntp', 'address_objects', 'service_objects', 'system']
 
 export default function Reports() {
   const { data: groups = [] } = useQuery({ queryKey: ['groups'], queryFn: listGroups })
-  const { data: auditLogs = [] } = useQuery({ queryKey: ['audit'], queryFn: listAuditLogs })
   const [sections, setSections] = useState<string[]>(ALL_SECTIONS)
   const [groupIds, setGroupIds] = useState<string[]>([])
   const [format, setFormat] = useState('json')
@@ -69,7 +67,7 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        {result && format === 'json' && (
+        {result != null && format === 'json' && (
           <Card sx={{ flex: '1 1 400px' }}>
             <CardContent>
               <Typography variant="h6" mb={1}>Report Output</Typography>
@@ -81,43 +79,6 @@ export default function Reports() {
           </Card>
         )}
       </Box>
-
-      <Typography variant="h6" fontWeight={600} mt={4} mb={2}>Audit Log</Typography>
-      <Card>
-        <Box sx={{ overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: '#f9fafb' }}>
-                {['Time', 'User', 'Action', 'Resource', 'IP'].map((h) => (
-                  <th key={h} style={{ padding: '10px 12px', textAlign: 'left',
-                    borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(auditLogs as AuditLog[]).map((log) => (
-                <tr key={log.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                  <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
-                    {new Date(log.created_at).toLocaleString()}
-                  </td>
-                  <td style={{ padding: '8px 12px' }}>{log.username ?? '—'}</td>
-                  <td style={{ padding: '8px 12px' }}>
-                    <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '2px 8px',
-                      borderRadius: 4, fontSize: 12 }}>{log.action}</span>
-                  </td>
-                  <td style={{ padding: '8px 12px' }}>
-                    {log.resource_type}{log.resource_id ? ` · ${log.resource_id.substring(0, 8)}…` : ''}
-                  </td>
-                  <td style={{ padding: '8px 12px' }}>{log.ip_address ?? '—'}</td>
-                </tr>
-              ))}
-              {(auditLogs as AuditLog[]).length === 0 && (
-                <tr><td colSpan={5} style={{ padding: 16, textAlign: 'center', color: '#9ca3af' }}>No audit logs yet</td></tr>
-              )}
-            </tbody>
-          </table>
-        </Box>
-      </Card>
     </Box>
   )
 }

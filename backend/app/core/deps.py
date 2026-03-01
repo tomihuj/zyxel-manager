@@ -1,3 +1,5 @@
+import hashlib
+from datetime import datetime, timezone
 from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -17,18 +19,62 @@ def get_current_user(
 ) -> User:
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    token = credentials.credentials
+
+    # First try JWT
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(token)
         if payload.get("type") != "access":
             raise JWTError("Wrong token type")
         user_id: str = payload.get("sub")
+        user = session.get(User, user_id)
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or inactive",
+            )
+        return user
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        pass
 
-    user = session.get(User, user_id)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-    return user
+    # Fall back to API token (prefix: ztm_)
+    if token.startswith("ztm_"):
+        from app.models.token import ApiToken
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        api_token = session.exec(
+            select(ApiToken).where(
+                ApiToken.token_hash == token_hash,
+                ApiToken.revoked == False,
+            )
+        ).first()
+
+        if not api_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or revoked API token",
+            )
+
+        if api_token.expires_at and api_token.expires_at < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API token expired",
+            )
+
+        # Update last_used_at
+        api_token.last_used_at = datetime.now(timezone.utc)
+        session.add(api_token)
+        session.commit()
+
+        user = session.get(User, api_token.user_id)
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or inactive",
+            )
+        return user
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
 def get_current_active_superuser(

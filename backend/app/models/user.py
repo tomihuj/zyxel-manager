@@ -61,4 +61,6 @@ class User(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True)),
     )
+    totp_secret: Optional[str] = Field(default=None, max_length=64)
+    totp_enabled: bool = Field(default=False)
     roles: List[Role] = Relationship(back_populates="users", link_model=UserRole)

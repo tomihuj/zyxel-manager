@@ -15,6 +15,8 @@ class ConfigSnapshot(SQLModel, table=True):
     version: int = Field(default=1)
     checksum: str = Field(max_length=64)
     is_baseline: bool = Field(default=False)
+    triggered_by: str = Field(default="sync", max_length=16)
+    label: Optional[str] = Field(default=None, max_length=255)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True)),

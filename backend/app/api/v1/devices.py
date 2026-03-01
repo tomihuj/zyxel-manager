@@ -1,16 +1,23 @@
+import csv
+import io
 import json
 import uuid
 import hashlib
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from sqlalchemy import delete as sql_delete
 from sqlmodel import select
 from pydantic import BaseModel
 
 from app.core.deps import CurrentUser, DBSession, RBAC
 from app.models.device import Device
 from app.models.config import ConfigSnapshot
+from app.models.compliance import ComplianceResult
+from app.models.backup import DeviceBackupSettings
+from app.models.job import BulkJobTarget
+from app.models.metric import DeviceMetric
 from app.services.crypto import encrypt_credentials, decrypt_credentials
 from app.services.audit import write_audit
 from app.adapters.registry import get_adapter
@@ -28,6 +35,8 @@ class DeviceCreate(BaseModel):
     username: str
     password: str
     tags: List[str] = []
+    notes: Optional[str] = None
+    label_color: Optional[str] = None
 
 
 class DeviceUpdate(BaseModel):
@@ -40,6 +49,8 @@ class DeviceUpdate(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
     tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+    label_color: Optional[str] = None
 
 
 def _device_dict(d: Device) -> dict:
@@ -49,16 +60,30 @@ def _device_dict(d: Device) -> dict:
         "tags": json.loads(d.tags or "[]"), "status": d.status,
         "last_seen": d.last_seen, "firmware_version": d.firmware_version,
         "created_at": d.created_at,
+        "group_ids": [str(g.id) for g in d.groups],
+        "drift_detected": d.drift_detected,
+        "drift_detected_at": d.drift_detected_at,
+        "notes": d.notes,
+        "label_color": d.label_color,
+        "credentials_updated_at": d.credentials_updated_at,
+        "deleted_at": d.deleted_at,
     }
 
 
 @router.get("")
 def list_devices(session: DBSession, rbac: RBAC, current: CurrentUser):
     rbac.require("view_devices")
-    devices = session.exec(select(Device)).all()
+    devices = session.exec(select(Device).where(Device.deleted_at == None)).all()  # noqa: E711
     allowed = rbac.accessible_device_ids()
     if allowed is not None:
         devices = [d for d in devices if str(d.id) in allowed]
+    return [_device_dict(d) for d in devices]
+
+
+@router.get("/deleted")
+def list_deleted_devices(session: DBSession, rbac: RBAC, current: CurrentUser):
+    rbac.require("view_devices")
+    devices = session.exec(select(Device).where(Device.deleted_at != None)).all()  # noqa: E711
     return [_device_dict(d) for d in devices]
 
 
@@ -70,12 +95,31 @@ def create_device(body: DeviceCreate, session: DBSession, rbac: RBAC, current: C
         port=body.port, protocol=body.protocol, adapter=body.adapter,
         encrypted_credentials=encrypt_credentials(body.username, body.password),
         tags=json.dumps(body.tags),
+        notes=body.notes,
+        label_color=body.label_color,
+        credentials_updated_at=datetime.now(timezone.utc),
     )
     session.add(device)
     session.commit()
     session.refresh(device)
-    write_audit(session, "create_device", current, "device", str(device.id), {"name": device.name})
-    return _device_dict(device)
+    # Try to get firmware version immediately (non-critical, best-effort)
+    try:
+        creds_dict = {"username": body.username, "password": body.password}
+        info = get_adapter(body.adapter).get_device_info(device, creds_dict)
+        if info.get("firmware_version"):
+            device.firmware_version = info["firmware_version"]
+            session.add(device)
+            session.commit()
+            session.refresh(device)
+    except Exception:
+        pass
+    resp = _device_dict(device)
+    write_audit(session, "create_device", current, "device", str(device.id), {"name": device.name},
+                request_body={"name": body.name, "model": body.model, "mgmt_ip": body.mgmt_ip,
+                              "port": body.port, "protocol": body.protocol, "adapter": body.adapter,
+                              "tags": body.tags, "username": body.username, "password": body.password},
+                response_body=resp)
+    return resp
 
 
 @router.get("/{device_id}")
@@ -106,23 +150,72 @@ def update_device(device_id: uuid.UUID, body: DeviceUpdate, session: DBSession,
             body.username or creds.get("username", ""),
             body.password or creds.get("password", ""),
         )
+        device.credentials_updated_at = datetime.now(timezone.utc)
+    if body.notes is not None:
+        device.notes = body.notes
+    if body.label_color is not None:
+        device.label_color = body.label_color
     device.updated_at = datetime.now(timezone.utc)
     session.add(device)
     session.commit()
     session.refresh(device)
-    write_audit(session, "update_device", current, "device", str(device_id))
-    return _device_dict(device)
+    resp = _device_dict(device)
+    write_audit(session, "update_device", current, "device", str(device_id),
+                request_body=body.model_dump(exclude_none=True),
+                response_body=resp)
+    return resp
 
 
 @router.delete("/{device_id}", status_code=204)
 def delete_device(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
+    """Soft-delete: marks deleted_at, hides from normal listing."""
     rbac.require("edit_devices", "write")
     device = session.get(Device, device_id)
     if not device:
         raise HTTPException(status_code=404)
+    if device.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Device is already deleted")
+    device.deleted_at = datetime.now(timezone.utc)
+    session.add(device)
+    session.commit()
+    write_audit(session, "delete_device", current, "device", str(device_id),
+                request_body={"device_id": str(device_id), "name": device.name})
+
+
+@router.post("/{device_id}/restore", status_code=200)
+def restore_device(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
+    """Restore a soft-deleted device back to active."""
+    rbac.require("edit_devices", "write")
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404)
+    if device.deleted_at is None:
+        raise HTTPException(status_code=409, detail="Device is not deleted")
+    device.deleted_at = None
+    session.add(device)
+    session.commit()
+    write_audit(session, "restore_device", current, "device", str(device_id),
+                request_body={"device_id": str(device_id), "name": device.name})
+    return _device_dict(device)
+
+
+@router.delete("/{device_id}/permanent", status_code=204)
+def permanent_delete_device(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
+    """Permanently delete a (soft-deleted) device and all its data."""
+    rbac.require("edit_devices", "write")
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404)
+    session.execute(sql_delete(ConfigSnapshot).where(ConfigSnapshot.device_id == device_id))
+    session.execute(sql_delete(ComplianceResult).where(ComplianceResult.device_id == device_id))
+    session.execute(sql_delete(BulkJobTarget).where(BulkJobTarget.device_id == device_id))
+    session.execute(sql_delete(DeviceMetric).where(DeviceMetric.device_id == device_id))
+    session.execute(sql_delete(DeviceBackupSettings).where(DeviceBackupSettings.device_id == device_id))
+    session.flush()
     session.delete(device)
     session.commit()
-    write_audit(session, "delete_device", current, "device", str(device_id))
+    write_audit(session, "permanent_delete_device", current, "device", str(device_id),
+                request_body={"device_id": str(device_id)})
 
 
 @router.post("/{device_id}/diagnostics")
@@ -194,18 +287,38 @@ def run_diagnostics(device_id: uuid.UUID, session: DBSession, rbac: RBAC, curren
 
 
 @router.post("/{device_id}/test-connection")
-def test_connection(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
+def test_connection(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser,
+                    timeout: int = Query(default=5, ge=1, le=60)):
     rbac.require("view_devices")
     device = session.get(Device, device_id)
     if not device:
         raise HTTPException(status_code=404)
     creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
-    result = get_adapter(device.adapter).test_connection(device, creds)
+    try:
+        result = get_adapter(device.adapter).test_connection(device, creds, timeout=timeout)
+    except Exception as exc:
+        write_audit(None, "test_connection_failed", current, "device", str(device_id),
+                    request_body={"device_id": str(device_id), "adapter": device.adapter},
+                    response_body={"error": str(exc)})
+        raise HTTPException(status_code=502, detail=str(exc))
     device.status = "online" if result.get("success") else "offline"
     if result.get("success"):
         device.last_seen = datetime.now(timezone.utc)
+        if not device.firmware_version:
+            try:
+                from app.adapters.zyxel import _extract_system_info
+                info = get_adapter(device.adapter).get_device_info(device, creds)
+                fw = info.get("firmware_version") or _extract_system_info(info.get("system")).get("firmware_version")
+                if fw:
+                    device.firmware_version = fw
+            except Exception:
+                pass
     session.add(device)
     session.commit()
+    action = "test_connection" if result.get("success") else "test_connection_failed"
+    write_audit(None, action, current, "device", str(device_id),
+                request_body={"device_id": str(device_id), "adapter": device.adapter},
+                response_body=result)
     return result
 
 
@@ -216,7 +329,12 @@ def sync_device(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: C
     if not device:
         raise HTTPException(status_code=404)
     creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
-    config = get_adapter(device.adapter).fetch_config(device, creds)
+    try:
+        config = get_adapter(device.adapter).fetch_config(device, creds)
+    except Exception as exc:
+        write_audit(None, "sync_device_failed", current, "device", str(device_id),
+                    response_body={"error": str(exc)})
+        raise HTTPException(status_code=502, detail=str(exc))
     data_str = json.dumps(config)
     checksum = hashlib.sha256(data_str.encode()).hexdigest()
     latest = session.exec(
@@ -229,12 +347,17 @@ def sync_device(device_id: uuid.UUID, session: DBSession, rbac: RBAC, current: C
                                checksum=checksum, version=version))
     device.status = "online"
     device.last_seen = datetime.now(timezone.utc)
-    if isinstance(config, dict) and config.get("system", {}).get("firmware"):
-        device.firmware_version = config["system"]["firmware"]
+    if isinstance(config, dict):
+        from app.adapters.zyxel import _extract_system_info
+        info = _extract_system_info(config.get("system"))
+        if info.get("firmware_version"):
+            device.firmware_version = info["firmware_version"]
     session.add(device)
     session.commit()
-    write_audit(session, "sync_device", current, "device", str(device_id))
-    return {"version": version, "checksum": checksum}
+    resp = {"version": version, "checksum": checksum}
+    write_audit(session, "sync_device", current, "device", str(device_id),
+                response_body=resp)
+    return resp
 
 
 @router.get("/{device_id}/snapshots")
@@ -268,7 +391,95 @@ def patch_device_config(device_id: uuid.UUID, section: str, patch: dict,
     if not device:
         raise HTTPException(status_code=404)
     creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
-    result = get_adapter(device.adapter).apply_patch(device, creds, section, patch)
-    write_audit(session, "patch_config", current, "device", str(device_id), {"section": section})
+    try:
+        result = get_adapter(device.adapter).apply_patch(device, creds, section, patch)
+    except Exception as exc:
+        write_audit(None, "patch_config_failed", current, "device", str(device_id),
+                    {"section": section},
+                    request_body=patch,
+                    response_body={"error": str(exc)})
+        raise HTTPException(status_code=502, detail=str(exc))
+    write_audit(session, "patch_config", current, "device", str(device_id), {"section": section},
+                request_body=patch,
+                response_body=result if isinstance(result, dict) else None)
     session.commit()
     return result
+
+
+@router.post("/{device_id}/snapshots/{snapshot_id}/restore")
+def restore_snapshot(device_id: uuid.UUID, snapshot_id: uuid.UUID,
+                     session: DBSession, rbac: RBAC, current: CurrentUser):
+    """Restore a device's configuration from a stored snapshot."""
+    rbac.require("edit_devices", "write")
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    snap = session.get(ConfigSnapshot, snapshot_id)
+    if not snap or snap.device_id != device_id:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
+    config = json.loads(snap.data_json)
+
+    try:
+        result = get_adapter(device.adapter).restore_config(device, creds, config)
+    except Exception as exc:
+        write_audit(session, "restore_backup_failed", current, "device", str(device_id),
+                    {"snapshot_id": str(snapshot_id)}, response_body={"error": str(exc)})
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    write_audit(session, "restore_backup", current, "device", str(device_id),
+                {"snapshot_id": str(snapshot_id), "version": snap.version},
+                response_body=result)
+    return result
+
+
+@router.post("/import")
+async def import_devices_csv(
+    session: DBSession,
+    rbac: RBAC,
+    current: CurrentUser,
+    file: UploadFile = File(...),
+):
+    rbac.require("edit_devices", "write")
+    content = await file.read()
+    text = content.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+
+    created = 0
+    errors = []
+
+    for row_num, row in enumerate(reader, start=2):
+        try:
+            name = row.get("name", "").strip()
+            mgmt_ip = row.get("mgmt_ip", "").strip()
+            if not name or not mgmt_ip:
+                errors.append({"row": row_num, "error": "name and mgmt_ip are required"})
+                continue
+
+            model = row.get("model", "USG FLEX 100").strip() or "USG FLEX 100"
+            adapter = row.get("adapter", "mock").strip() or "mock"
+            port = int(row.get("port", 443) or 443)
+            protocol = row.get("protocol", "https").strip() or "https"
+            username = row.get("username", "admin").strip() or "admin"
+            password = row.get("password", "").strip()
+
+            device = Device(
+                name=name,
+                model=model,
+                mgmt_ip=mgmt_ip,
+                port=port,
+                protocol=protocol,
+                adapter=adapter,
+                encrypted_credentials=encrypt_credentials(username, password),
+                tags=json.dumps([]),
+            )
+            session.add(device)
+            session.commit()
+            created += 1
+        except Exception as exc:
+            errors.append({"row": row_num, "error": str(exc)})
+
+    write_audit(session, "import_devices_csv", current, None, None,
+                {"created": created, "errors": len(errors)})
+    return {"created": created, "errors": errors}

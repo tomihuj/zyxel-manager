@@ -10,5 +10,6 @@ export const assignRole = async (userId: string, roleId: string) => api.post(`/u
 export const removeRole = async (userId: string, roleId: string) => api.delete(`/users/${userId}/roles/${roleId}`)
 export const listRoles = async () => (await api.get('/users/roles/all')).data as Role[]
 export const createRole = async (body: { name: string; description?: string }) => (await api.post('/users/roles', body)).data as Role
+export const deleteRole = async (id: string) => api.delete(`/users/roles/${id}`)
 export const getRolePermissions = async (roleId: string) => (await api.get(`/users/roles/${roleId}/permissions`)).data as Permission[]
 export const setRolePermissions = async (roleId: string, perms: Permission[]) => api.put(`/users/roles/${roleId}/permissions`, perms)

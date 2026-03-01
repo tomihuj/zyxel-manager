@@ -14,4 +14,3 @@ export const generateReport = async (body: Record<string, unknown>) => {
   return (await api.post('/reports/generate', body)).data
 }
 
-export const listAuditLogs = async () => (await api.get('/audit/logs?limit=100')).data

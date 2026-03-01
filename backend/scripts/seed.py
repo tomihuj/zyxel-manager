@@ -17,6 +17,8 @@ from app.core.config import get_settings
 from app.core.security import hash_password
 from app.models import *  # noqa
 from app.services.crypto import encrypt_credentials
+from app.adapters.registry import get_adapter
+from app.adapters.zyxel import _extract_system_info
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("seed")
@@ -84,6 +86,49 @@ def seed():
                     s.add(GroupMembership(device_id=device.id, group_id=group.id))
                     s.commit()
                 logger.info("Created device: %s", name)
+
+        # Backfill firmware_version for mock devices that have never been synced
+        stale = s.exec(
+            select(Device).where(Device.adapter == "mock", Device.firmware_version == None)  # noqa: E711
+        ).all()
+        if stale:
+            adapter = get_adapter("mock")
+            for device in stale:
+                try:
+                    info = adapter.get_device_info(device, {})
+                    if info.get("firmware_version"):
+                        device.firmware_version = info["firmware_version"]
+                        s.add(device)
+                except Exception:
+                    pass
+            s.commit()
+            logger.info("Backfilled firmware_version for %d mock device(s)", len(stale))
+
+        # Backfill firmware_version from existing config snapshots (all adapters)
+        from app.models.config import ConfigSnapshot
+        no_fw = s.exec(select(Device).where(Device.firmware_version == None)).all()  # noqa: E711
+        backfilled = 0
+        for device in no_fw:
+            snap = s.exec(
+                select(ConfigSnapshot)
+                .where(ConfigSnapshot.device_id == device.id)
+                .order_by(ConfigSnapshot.version.desc())
+            ).first()
+            if not snap:
+                continue
+            try:
+                config = json.loads(snap.data_json)
+                sys_section = config.get("system") if isinstance(config, dict) else None
+                info = _extract_system_info(sys_section) if sys_section else {}
+                if info.get("firmware_version"):
+                    device.firmware_version = info["firmware_version"]
+                    s.add(device)
+                    backfilled += 1
+            except Exception:
+                pass
+        if backfilled:
+            s.commit()
+            logger.info("Backfilled firmware_version from snapshots for %d device(s)", backfilled)
 
     logger.info("Seed complete")
 

@@ -52,6 +52,34 @@ _SECTION_CLI: dict[str, list[str]] = {
 _CGI_PATH = "/cgi-bin/zysh-cgi"
 
 
+def _extract_system_info(data) -> dict:
+    """Extract firmware_version / serial_number / model from a parsed 'show version' response.
+
+    Handles:
+      - list of dicts with _boot_status (real Zyxel): pick the Running image
+      - single dict (mock / legacy)
+    """
+    row = {}
+    if isinstance(data, list) and data:
+        # Prefer the "Running" image; fall back to first entry
+        running = next((r for r in data if isinstance(r, dict) and r.get("_boot_status") == "Running"), None)
+        row = running or (data[0] if isinstance(data[0], dict) else {})
+    elif isinstance(data, dict) and "_error" not in data:
+        row = data
+
+    fw = (row.get("_firmware_version")        # real Zyxel: _firmware_version
+          or row.get("Firmware Version")       # alternative real format
+          or row.get("firmware")               # mock format
+          or row.get("Firmware")
+          or row.get("version")
+          or row.get("Version"))
+    serial = (row.get("_serial_number") or row.get("Serial Number")
+              or row.get("serial") or row.get("Serial"))
+    model = (row.get("_model") or row.get("Model Name")
+             or row.get("model") or row.get("Model"))
+    return {"firmware_version": fw, "serial_number": serial, "model": model}
+
+
 def _parse_zysh_response(text: str, cmd: str = "") -> list | dict | None:
     """Parse the JavaScript variable response from zysh-cgi.
 
@@ -321,10 +349,10 @@ class ZyxelAdapter(FirewallAdapter):
                     })
             return results
 
-    def test_connection(self, device, credentials: dict) -> dict:
+    def test_connection(self, device, credentials: dict, timeout: int = 5) -> dict:
         t0 = time.monotonic()
         try:
-            with self._client(device) as c:
+            with httpx.Client(verify=False, timeout=float(timeout), follow_redirects=False) as c:
                 self._authenticate(c, self._base_url(device), credentials)
             return {"success": True, "message": "Connected",
                     "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
@@ -384,6 +412,17 @@ class ZyxelAdapter(FirewallAdapter):
         except Exception as e:
             logger.error("ZyxelAdapter.fetch_config: %s", e)
             raise
+
+    def get_device_info(self, device, credentials: dict) -> dict:
+        try:
+            with self._client(device) as c:
+                base = self._base_url(device)
+                self._authenticate(c, base, credentials)
+                data = self._fetch_section_multi(c, base, _SECTION_CLI["system"])
+                return _extract_system_info(data)
+        except Exception as e:
+            logger.error("ZyxelAdapter.get_device_info: %s", e)
+            return {}
 
     def restore_config(self, device, credentials: dict, config: dict) -> dict:
         return {"success": False, "message": "Restore not yet supported for Zyxel adapter"}

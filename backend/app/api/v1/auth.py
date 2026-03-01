@@ -14,6 +14,10 @@ from app.services.audit import write_audit
 
 router = APIRouter()
 
+_MAX_FAILURES = 5
+_LOCK_SECONDS = 900      # 15 min lock
+_WINDOW_SECONDS = 600    # 10 min window
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -31,25 +35,51 @@ def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     session: DBSession,
 ):
+    import redis as redis_lib
+    from app.core.config import get_settings
+    r = redis_lib.from_url(get_settings().redis_url, decode_responses=True)
+    lock_key = f"ztm:login:lock:{form_data.username}"
+    fail_key = f"ztm:login:fail:{form_data.username}"
+
+    if r.exists(lock_key):
+        ttl = r.ttl(lock_key)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Account temporarily locked due to too many failed attempts. Try again in {ttl} seconds.",
+        )
+
     user = session.exec(select(User).where(User.username == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
+        fails = r.incr(fail_key)
+        r.expire(fail_key, _WINDOW_SECONDS)
+        if fails >= _MAX_FAILURES:
+            r.setex(lock_key, _LOCK_SECONDS, "1")
+            r.delete(fail_key)
         write_audit(session, "login_failed",
                     details={"username": form_data.username},
-                    ip_address=request.client.host if request.client else None)
+                    ip_address=request.client.host if request.client else None,
+                    request_body={"username": form_data.username})
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+
+    # Clear failure counters on successful login
+    r.delete(fail_key, lock_key)
+
     if password_needs_rehash(user.hashed_password):
         user.hashed_password = hash_password(form_data.password)
         user.updated_at = datetime.now(timezone.utc)
         session.add(user)
         session.commit()
-    write_audit(session, "login", user,
-                ip_address=request.client.host if request.client else None)
-    return TokenResponse(
+    tokens = TokenResponse(
         access_token=create_access_token(str(user.id)),
         refresh_token=create_refresh_token(str(user.id)),
     )
+    write_audit(session, "login", user,
+                ip_address=request.client.host if request.client else None,
+                request_body={"username": form_data.username},
+                response_body={"token_type": "bearer"})
+    return tokens
 
 
 @router.post("/refresh", response_model=TokenResponse)

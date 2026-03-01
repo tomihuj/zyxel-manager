@@ -5,6 +5,7 @@ import {
   Switch, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions,
   IconButton, Tooltip, ToggleButtonGroup, ToggleButton, Autocomplete, TextField, Snackbar,
 } from '@mui/material'
+import ConfirmDialog from '../components/ConfirmDialog'
 import CloudSyncIcon from '@mui/icons-material/CloudSync'
 import SettingsIcon from '@mui/icons-material/Settings'
 import HistoryIcon from '@mui/icons-material/History'
@@ -319,23 +320,14 @@ function BackupHistoryDialog({
       </DialogActions>
 
       {/* Confirm delete */}
-      <Dialog open={!!deleteId} onClose={() => setDeleteId(null)} maxWidth="xs">
-        <DialogTitle>Delete backup?</DialogTitle>
-        <DialogContent>
-          <Typography>This action cannot be undone.</Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteId(null)}>Cancel</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={() => deleteId && doDelete.mutate(deleteId)}
-            disabled={doDelete.isPending}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDialog
+        open={!!deleteId}
+        title="Delete Backup"
+        message="Are you sure you want to delete this backup snapshot? This action cannot be undone."
+        onConfirm={() => deleteId && doDelete.mutate(deleteId)}
+        onClose={() => setDeleteId(null)}
+        loading={doDelete.isPending}
+      />
 
       {restoreSnap && (
         <RestoreConfirmDialog

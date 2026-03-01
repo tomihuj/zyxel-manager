@@ -108,3 +108,92 @@ def run_bulk_job(self, job_id: str):
         session.add(job)
         session.commit()
         _log(session, job_id, "info", f"Done: {success_count} ok, {fail_count} failed")
+
+        if fail_count > 0:
+            try:
+                from app.tasks.alerts import fire_alert
+                fire_alert.delay("job_failed", {
+                    "job_id": str(job.id),
+                    "job_name": job.name,
+                    "fail_count": fail_count,
+                    "success_count": success_count,
+                })
+            except Exception:
+                pass
+
+            # Rollback on failure: restore before_json to every device that succeeded
+            if job.rollback_on_failure and success_count > 0:
+                _log(session, job_id, "info", "Rolling back successful targets due to failures...")
+                targets_fresh = session.exec(
+                    select(BulkJobTarget).where(BulkJobTarget.job_id == job_id)
+                ).all()
+                for t in targets_fresh:
+                    if t.status == "success" and t.before_json:
+                        device = session.get(Device, t.device_id)
+                        if not device:
+                            continue
+                        try:
+                            before = json.loads(t.before_json)
+                            creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
+                            adapter = get_adapter(device.adapter)
+                            adapter.restore_config(device, creds, before)
+                            _log(session, job_id, "info", f"Rolled back {device.name}")
+                        except Exception as exc:
+                            _log(session, job_id, "error", f"Rollback failed for {device.name}: {exc}")
+
+
+@celery_app.task(bind=True, name="bulk.run_scheduled_jobs")
+def run_scheduled_jobs(self):
+    """Beat task: clone and dispatch any BulkJob whose cron expression matches now."""
+    try:
+        from croniter import croniter
+    except ImportError:
+        logger.warning("croniter not installed; scheduled jobs disabled")
+        return
+
+    engine = get_engine()
+    now = datetime.now(timezone.utc)
+
+    with Session(engine) as session:
+        jobs = session.exec(
+            select(BulkJob).where(
+                BulkJob.schedule_enabled == True,
+                BulkJob.cron_expression.isnot(None),
+            )
+        ).all()
+
+        for template_job in jobs:
+            try:
+                cron = croniter(template_job.cron_expression, now)
+                prev = cron.get_prev(datetime)
+                # Fire if the previous cron tick was within the last 60 seconds
+                delta = (now - prev.replace(tzinfo=timezone.utc)).total_seconds()
+                if delta > 60:
+                    continue
+            except Exception as exc:
+                logger.warning("Invalid cron for job %s: %s", template_job.id, exc)
+                continue
+
+            # Clone the job
+            targets = session.exec(
+                select(BulkJobTarget).where(BulkJobTarget.job_id == template_job.id)
+            ).all()
+
+            new_job = BulkJob(
+                name=f"{template_job.name} (scheduled)",
+                section=template_job.section,
+                patch_json=template_job.patch_json,
+                status="pending",
+                created_by=template_job.created_by,
+            )
+            session.add(new_job)
+            session.commit()
+            session.refresh(new_job)
+
+            for t in targets:
+                session.add(BulkJobTarget(job_id=new_job.id, device_id=t.device_id))
+            session.commit()
+
+            run_bulk_job.delay(str(new_job.id))
+            logger.info("Dispatched scheduled job clone %s from template %s",
+                        new_job.id, template_job.id)

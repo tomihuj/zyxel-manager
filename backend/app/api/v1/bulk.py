@@ -22,6 +22,9 @@ class BulkJobCreate(BaseModel):
     section: str
     patch: dict
     device_ids: List[uuid.UUID]
+    schedule_enabled: bool = False
+    cron_expression: Optional[str] = None
+    rollback_on_failure: bool = False
 
 
 def _job_dict(job: BulkJob, session) -> dict:
@@ -38,17 +41,28 @@ def _job_dict(job: BulkJob, session) -> dict:
 @router.post("/jobs", status_code=201)
 def create_bulk_job(body: BulkJobCreate, session: DBSession, rbac: RBAC, current: CurrentUser):
     rbac.require("bulk_actions", "write")
-    job = BulkJob(name=body.name, section=body.section,
-                  patch_json=json.dumps(body.patch), created_by=current.id)
+    job = BulkJob(
+        name=body.name,
+        section=body.section,
+        patch_json=json.dumps(body.patch),
+        created_by=current.id,
+        schedule_enabled=body.schedule_enabled,
+        cron_expression=body.cron_expression,
+        rollback_on_failure=body.rollback_on_failure,
+    )
     session.add(job)
     session.flush()
     for did in body.device_ids:
         session.add(BulkJobTarget(job_id=job.id, device_id=did))
     session.commit()
     session.refresh(job)
+    resp = _job_dict(job, session)
     write_audit(session, "create_bulk_job", current, "bulk_job", str(job.id),
-                {"name": body.name, "section": body.section, "devices": len(body.device_ids)})
-    return _job_dict(job, session)
+                {"name": body.name, "section": body.section, "devices": len(body.device_ids)},
+                request_body={"name": body.name, "section": body.section,
+                              "patch": body.patch, "device_count": len(body.device_ids)},
+                response_body={"id": resp["id"], "status": resp["status"]})
+    return resp
 
 
 @router.get("/jobs")
@@ -117,8 +131,10 @@ def execute_job(job_id: uuid.UUID, session: DBSession, rbac: RBAC, current: Curr
     job.status = "queued"
     session.add(job)
     session.commit()
-    write_audit(session, "execute_bulk_job", current, "bulk_job", str(job_id))
-    return {"task_id": task.id, "status": "queued"}
+    resp = {"task_id": task.id, "status": "queued"}
+    write_audit(session, "execute_bulk_job", current, "bulk_job", str(job_id),
+                response_body=resp)
+    return resp
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=204)
@@ -133,3 +149,23 @@ def cancel_job(job_id: uuid.UUID, session: DBSession, rbac: RBAC, current: Curre
     job.status = "cancelled"
     session.add(job)
     session.commit()
+    write_audit(session, "cancel_bulk_job", current, "bulk_job", str(job_id),
+                request_body={"job_id": str(job_id), "name": job.name})
+
+
+@router.post("/jobs/{job_id}/approve")
+def approve_job(job_id: uuid.UUID, session: DBSession, rbac: RBAC, current: CurrentUser):
+    """Approve a bulk job that requires approval before execution."""
+    rbac.require("bulk_actions", "write")
+    job = session.get(BulkJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404)
+    if job.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Job is already {job.status}")
+    from datetime import datetime, timezone
+    job.approved_by = current.id
+    job.approved_at = datetime.now(timezone.utc)
+    session.add(job)
+    session.commit()
+    write_audit(session, "approve_bulk_job", current, "bulk_job", str(job_id))
+    return {"approved": True, "approved_by": str(current.id), "approved_at": job.approved_at}

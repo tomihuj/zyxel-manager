@@ -1,6 +1,7 @@
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status
+from sqlalchemy import delete as sql_delete
 from sqlmodel import select
 from pydantic import BaseModel
 
@@ -34,8 +35,11 @@ def create_group(body: GroupCreate, session: DBSession, current: SuperUser):
     session.add(group)
     session.commit()
     session.refresh(group)
-    write_audit(session, "create_group", current, "group", str(group.id))
-    return _group_dict(group, 0)
+    resp = _group_dict(group, 0)
+    write_audit(session, "create_group", current, "group", str(group.id),
+                request_body={"name": body.name, "description": body.description},
+                response_body=resp)
+    return resp
 
 
 @router.get("/{group_id}")
@@ -58,7 +62,11 @@ def update_group(group_id: uuid.UUID, body: GroupCreate, session: DBSession, cur
     session.commit()
     session.refresh(group)
     count = len(session.exec(select(GroupMembership).where(GroupMembership.group_id == group_id)).all())
-    return _group_dict(group, count)
+    resp = _group_dict(group, count)
+    write_audit(session, "update_group", current, "group", str(group_id),
+                request_body={"name": body.name, "description": body.description},
+                response_body=resp)
+    return resp
 
 
 @router.delete("/{group_id}", status_code=204)
@@ -66,6 +74,10 @@ def delete_group(group_id: uuid.UUID, session: DBSession, current: SuperUser):
     group = session.get(DeviceGroup, group_id)
     if not group:
         raise HTTPException(status_code=404)
+    write_audit(session, "delete_group", current, "group", str(group_id),
+                request_body={"group_id": str(group_id), "name": group.name})
+    session.execute(sql_delete(GroupMembership).where(GroupMembership.group_id == group_id))
+    session.flush()
     session.delete(group)
     session.commit()
 

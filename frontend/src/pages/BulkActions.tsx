@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Box, Typography, Card, CardContent, Stepper, Step, StepLabel, Button,
   TextField, MenuItem, FormControlLabel, Checkbox, Alert, Chip,
@@ -6,7 +6,7 @@ import {
 } from '@mui/material'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDevices } from '../api/devices'
-import { listJobs, createJob, previewJob, executeJob } from '../api/bulk'
+import { listJobs, createJob, previewJob, executeJob, getJob } from '../api/bulk'
 
 const SECTIONS = ['ntp', 'dns', 'interfaces', 'routing', 'nat',
   'firewall_rules', 'vpn', 'address_objects', 'service_objects']
@@ -25,6 +25,8 @@ const SECTION_TEMPLATES: Record<string, object> = {
 
 const templateFor = (s: string) => JSON.stringify(SECTION_TEMPLATES[s] ?? {}, null, 2)
 
+const TERMINAL_STATUSES = new Set(['completed', 'partial', 'cancelled', 'failed'])
+
 export default function BulkActions() {
   const qc = useQueryClient()
   const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
@@ -38,15 +40,46 @@ export default function BulkActions() {
   const [createdJobId, setCreatedJobId] = useState<string | null>(null)
   const [previews, setPreviews] = useState<any[]>([])
   const [patchError, setPatchError] = useState('')
+  const [pollingJobId, setPollingJobId] = useState<string | null>(null)
+  const [jobDetail, setJobDetail] = useState<any | null>(null)
+  const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [cronExpression, setCronExpression] = useState('')
+  const [rollbackOnFailure, setRollbackOnFailure] = useState(false)
 
   const toggle = (id: string) =>
     setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id])
+
+  // Poll the job every 2s until it reaches a terminal status
+  useEffect(() => {
+    if (!pollingJobId) return
+    const interval = setInterval(async () => {
+      try {
+        const job = await getJob(pollingJobId)
+        if (TERMINAL_STATUSES.has(job.status)) {
+          setJobDetail(job)
+          setPollingJobId(null)
+          qc.invalidateQueries({ queryKey: ['jobs'] })
+        }
+      } catch {
+        // keep polling on transient errors
+      }
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [pollingJobId, qc])
 
   const createMut = useMutation({
     mutationFn: () => {
       try {
         const patch = JSON.parse(patchText)
-        return createJob({ name: jobName, section, patch, device_ids: selected })
+        return createJob({
+          name: jobName,
+          section,
+          patch,
+          device_ids: selected,
+          schedule_enabled: scheduleEnabled,
+          cron_expression: scheduleEnabled ? cronExpression : null,
+          rollback_on_failure: rollbackOnFailure,
+        })
       } catch {
         throw new Error('Invalid JSON patch')
       }
@@ -62,12 +95,19 @@ export default function BulkActions() {
 
   const executeMut = useMutation({
     mutationFn: () => executeJob(createdJobId!),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['jobs'] }); setStep(4) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['jobs'] })
+      setStep(4)
+      setJobDetail(null)
+      setPollingJobId(createdJobId)
+    },
   })
 
   const reset = () => {
     setStep(0); setSelected([]); setCreatedJobId(null)
     setPreviews([]); setPatchError(''); setJobName('New Bulk Job')
+    setPollingJobId(null); setJobDetail(null)
+    setScheduleEnabled(false); setCronExpression(''); setRollbackOnFailure(false)
   }
 
   return (
@@ -94,6 +134,39 @@ export default function BulkActions() {
                   sx={{ display: 'block' }} />
               ))}
               {devices.length === 0 && <Alert severity="info">No devices found. Add some on the Devices page first.</Alert>}
+              <Box sx={{ mt: 2, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                <FormControlLabel
+                  label="Enable schedule (run automatically)"
+                  control={
+                    <Checkbox
+                      checked={scheduleEnabled}
+                      onChange={(e) => setScheduleEnabled(e.target.checked)}
+                    />
+                  }
+                />
+                {scheduleEnabled && (
+                  <TextField
+                    label="Cron Expression"
+                    fullWidth
+                    size="small"
+                    value={cronExpression}
+                    onChange={(e) => setCronExpression(e.target.value)}
+                    placeholder="e.g. 0 2 * * * (daily at 2am)"
+                    helperText="Standard 5-field cron: minute hour day month weekday"
+                    sx={{ mt: 1 }}
+                  />
+                )}
+                <FormControlLabel
+                  label="Rollback on failure (restore all successful devices if any fail)"
+                  control={
+                    <Checkbox
+                      checked={rollbackOnFailure}
+                      onChange={(e) => setRollbackOnFailure(e.target.checked)}
+                    />
+                  }
+                  sx={{ mt: 1 }}
+                />
+              </Box>
               <Button variant="contained" sx={{ mt: 2 }} disabled={selected.length === 0}
                 onClick={() => setStep(1)}>
                 Next ({selected.length} selected)
@@ -163,10 +236,54 @@ export default function BulkActions() {
           )}
 
           {step === 4 && (
-            <Alert severity="success" sx={{ display: 'flex', alignItems: 'center' }}>
-              Job queued for execution!
-              <Button sx={{ ml: 2 }} onClick={reset}>New Job</Button>
-            </Alert>
+            <Box>
+              {!jobDetail ? (
+                <Alert severity="info" icon={<CircularProgress size={20} />} sx={{ mb: 2, alignItems: 'center' }}>
+                  Job queued — polling for results…
+                </Alert>
+              ) : (
+                <Alert
+                  severity={jobDetail.status === 'completed' ? 'success' : jobDetail.status === 'partial' ? 'warning' : 'error'}
+                  sx={{ mb: 2 }}
+                >
+                  Job {jobDetail.status}: {jobDetail.success_count}/{jobDetail.target_count} succeeded
+                </Alert>
+              )}
+
+              {jobDetail?.targets && jobDetail.targets.length > 0 && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" fontWeight={600} mb={1}>Per-device results</Typography>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow sx={{ '& th': { fontWeight: 600 } }}>
+                        <TableCell>Device</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Error</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {jobDetail.targets.map((t: any) => (
+                        <TableRow key={t.device_id ?? t.id}>
+                          <TableCell>
+                            {devices.find((d) => d.id === t.device_id)?.name ?? t.device_id}
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              size="small"
+                              label={t.status}
+                              color={t.status === 'success' ? 'success' : t.status === 'failed' ? 'error' : 'default'}
+                            />
+                          </TableCell>
+                          <TableCell sx={{ fontSize: 12, color: 'error.main' }}>{t.error ?? '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </Box>
+              )}
+
+              <Button variant="outlined" onClick={reset}>New Job</Button>
+            </Box>
           )}
         </CardContent>
       </Card>

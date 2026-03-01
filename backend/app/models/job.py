@@ -25,6 +25,13 @@ class BulkJob(SQLModel, table=True):
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
     celery_task_id: Optional[str] = Field(default=None, max_length=128)
+    cron_expression: Optional[str] = Field(default=None, max_length=64)
+    schedule_enabled: bool = Field(default=False)
+    rollback_on_failure: bool = Field(default=False)
+    approved_by: Optional[uuid.UUID] = Field(default=None, foreign_key="users.id")
+    approved_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
+    )
     targets: list["BulkJobTarget"] = Relationship(back_populates="job")
     logs: list["BulkJobLog"] = Relationship(back_populates="job")
 

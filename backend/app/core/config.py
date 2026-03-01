@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = "Admin1234!"
 
+    # SMTP settings for email alert delivery
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "noreply@zyxelmanager.local"
+    smtp_use_tls: bool = False       # SMTP_SSL (port 465)
+    smtp_use_starttls: bool = True   # STARTTLS (port 587)
+
     class Config:
         env_file = ".env"
         extra = "ignore"

@@ -33,7 +33,10 @@ class ReportRequest(BaseModel):
 def generate_report(body: ReportRequest, session: DBSession, rbac: RBAC, current: CurrentUser):
     rbac.require("export_reports")
     write_audit(session, "generate_report", current,
-                details={"sections": body.sections, "format": body.format})
+                details={"sections": body.sections, "format": body.format},
+                request_body={"sections": body.sections, "format": body.format,
+                              "group_ids": [str(g) for g in (body.group_ids or [])],
+                              "tags": body.tags})
 
     device_ids: set[uuid.UUID] = set()
     if body.device_ids:
