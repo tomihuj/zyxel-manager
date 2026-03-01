@@ -353,12 +353,12 @@ function FindingsTab() {
       ),
     },
     {
-      field: 'first_seen', headerName: 'First Seen', width: 150,
-      valueGetter: (v) => new Date(v).toLocaleDateString(),
+      field: 'first_seen', headerName: 'First Seen', width: 165,
+      valueGetter: (v) => new Date(v).toLocaleString(),
     },
     {
-      field: 'last_seen', headerName: 'Last Seen', width: 150,
-      valueGetter: (v) => new Date(v).toLocaleDateString(),
+      field: 'last_seen', headerName: 'Last Seen', width: 165,
+      valueGetter: (v) => new Date(v).toLocaleString(),
     },
     {
       field: 'actions', headerName: '', width: 130, sortable: false,
