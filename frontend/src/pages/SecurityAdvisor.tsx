@@ -21,6 +21,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import SettingsIcon from '@mui/icons-material/Settings'
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import {
   listFindings, suppressFinding, reopenFinding, remediateFinding,
   listScans, triggerScan, listScores, getSecuritySummary, getFindingContext,
@@ -262,6 +263,176 @@ function OverviewTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Compliance reference database
+// ---------------------------------------------------------------------------
+
+interface RefDetail {
+  framework: string
+  title: string
+  description: string
+  url: string
+}
+
+const CIS_URL = 'https://www.cisecurity.org/benchmark/cisco'
+const ISO_URL = 'https://www.iso.org/standard/54534.html'
+
+function nistUrl(control: string) {
+  return `https://csrc.nist.gov/Projects/risk-management/sp800-53-controls/release-search#!/control?version=5.1&number=${control}`
+}
+
+const COMPLIANCE_REF_DB: Record<string, RefDetail> = {
+  // ── CIS Benchmark for Firewalls ──────────────────────────────────────────
+  'CIS-FW-1.1': { framework: 'CIS Firewall Benchmark', title: 'Deny by Default', description: 'All firewall rule sets must have an explicit deny-all rule as the last entry to block traffic not explicitly permitted.', url: CIS_URL },
+  'CIS-FW-1.2': { framework: 'CIS Firewall Benchmark', title: 'Remove Unused Rules', description: 'Unused or disabled firewall rules should be removed to reduce the attack surface and simplify audits.', url: CIS_URL },
+  'CIS-FW-1.3': { framework: 'CIS Firewall Benchmark', title: 'No WAN-to-LAN Permit', description: 'Inbound connections from untrusted zones (WAN) to trusted zones (LAN) must not be permitted without explicit business justification.', url: CIS_URL },
+  'CIS-FW-1.4': { framework: 'CIS Firewall Benchmark', title: 'Ingress Filtering (BCP38)', description: 'Implement ingress filtering to block IP packets with spoofed source addresses. Complements RFC 2827 (BCP38).', url: CIS_URL },
+  'CIS-FW-1.5': { framework: 'CIS Firewall Benchmark', title: 'Flood / DoS Protection', description: 'Enable rate-limiting and flood-protection mechanisms to mitigate denial-of-service attacks.', url: CIS_URL },
+  'CIS-FW-1.6': { framework: 'CIS Firewall Benchmark', title: 'Port Scan Detection', description: 'Enable port-scan detection to identify reconnaissance activity against the firewall and protected networks.', url: CIS_URL },
+  'CIS-FW-1.7': { framework: 'CIS Firewall Benchmark', title: 'Intrusion Prevention (IPS)', description: 'Enable IPS in blocking (inline) mode to actively prevent exploitation attempts rather than merely logging them.', url: CIS_URL },
+  'CIS-FW-2.1': { framework: 'CIS Firewall Benchmark', title: 'Strong Admin Authentication', description: 'Administrative access must require strong, unique credentials. Default account names and passwords must be changed.', url: CIS_URL },
+  'CIS-FW-2.2': { framework: 'CIS Firewall Benchmark', title: 'Encrypted Management Traffic', description: 'All administrative sessions must use encrypted protocols (SSH, HTTPS). Cleartext protocols (Telnet, HTTP) must be disabled.', url: CIS_URL },
+  'CIS-FW-2.3': { framework: 'CIS Firewall Benchmark', title: 'Restrict Management Access', description: 'Management interface access should be restricted to specific trusted IP addresses or management networks.', url: CIS_URL },
+  'CIS-FW-2.4': { framework: 'CIS Firewall Benchmark', title: 'Management on Secure Zone', description: 'The management interface must not be exposed to untrusted zones such as the WAN or DMZ.', url: CIS_URL },
+  'CIS-FW-2.5': { framework: 'CIS Firewall Benchmark', title: 'Secure SNMP Configuration', description: 'SNMP must use SNMPv3 with authentication and privacy, or be disabled. SNMP trap receivers must be configured.', url: CIS_URL },
+  'CIS-FW-2.6': { framework: 'CIS Firewall Benchmark', title: 'Disable TFTP', description: 'TFTP provides unauthenticated file transfer and must be disabled unless explicitly required.', url: CIS_URL },
+  'CIS-FW-3.1': { framework: 'CIS Firewall Benchmark', title: 'NTP Configuration', description: 'Accurate time synchronisation via NTP is required for meaningful log correlation, forensics, and certificate validation.', url: CIS_URL },
+  'CIS-FW-3.2': { framework: 'CIS Firewall Benchmark', title: 'Audit Logging Enabled', description: 'All security-relevant events must be logged and forwarded to a centralised syslog server for retention and analysis.', url: CIS_URL },
+  'CIS-FW-4.1': { framework: 'CIS Firewall Benchmark', title: 'Strong VPN Encryption', description: 'VPN tunnels must use strong encryption algorithms (AES-256) and authentication (IKEv2, certificate-based) — not deprecated protocols.', url: CIS_URL },
+  'CIS-FW-4.2': { framework: 'CIS Firewall Benchmark', title: 'VPN Certificate Auth', description: 'VPN authentication should use certificates or multi-factor authentication rather than pre-shared keys alone.', url: CIS_URL },
+  'CIS-FW-5.1': { framework: 'CIS Firewall Benchmark', title: 'Rename Default Admin Account', description: 'The default "admin" account must be renamed or disabled to prevent targeted credential attacks.', url: CIS_URL },
+  'CIS-FW-5.2': { framework: 'CIS Firewall Benchmark', title: 'Least Privilege for Accounts', description: 'Administrative accounts must be granted only the minimum privileges required for their role. Multiple full-admin accounts increase risk.', url: CIS_URL },
+  'CIS-FW-5.3': { framework: 'CIS Firewall Benchmark', title: 'Session Timeout', description: 'Inactive administrative sessions must time out automatically to prevent unauthorised access from unattended terminals.', url: CIS_URL },
+  'CIS-FW-5.4': { framework: 'CIS Firewall Benchmark', title: 'Account Lockout Policy', description: 'Accounts must lock after a defined number of consecutive failed login attempts to prevent brute-force attacks.', url: CIS_URL },
+  'CIS-FW-5.5': { framework: 'CIS Firewall Benchmark', title: 'Password Complexity Policy', description: 'Passwords must meet minimum length, complexity, and history requirements to resist guessing and dictionary attacks.', url: CIS_URL },
+  'CIS-FW-5.6': { framework: 'CIS Firewall Benchmark', title: 'Multi-Factor Authentication', description: 'Administrative access should require a second authentication factor in addition to a password.', url: CIS_URL },
+  'CIS-FW-6.1': { framework: 'CIS Firewall Benchmark', title: 'Firmware Up to Date', description: 'The firewall firmware must be kept current to address known vulnerabilities and security issues.', url: CIS_URL },
+  'CIS-FW-6.2': { framework: 'CIS Firewall Benchmark', title: 'Firmware Integrity', description: 'Firmware updates should be verified for integrity before installation using vendor-provided checksums or signatures.', url: CIS_URL },
+  'CIS-FW-7.1': { framework: 'CIS Firewall Benchmark', title: 'Malware / IPS Protection', description: 'Intrusion prevention and anti-malware capabilities should be enabled and kept up to date with current signatures.', url: CIS_URL },
+  'CIS-FW-7.2': { framework: 'CIS Firewall Benchmark', title: 'Content / URL Filtering', description: 'Web content filtering should be enabled to block access to malicious or policy-violating categories.', url: CIS_URL },
+  'CIS-FW-8.1': { framework: 'CIS Firewall Benchmark', title: 'Configuration Backup', description: 'Firewall configuration must be backed up regularly and stored securely to enable recovery after failure or misconfiguration.', url: CIS_URL },
+
+  // ── NIST SP 800-53 Rev 5 ────────────────────────────────────────────────
+  'NIST-SC-5':  { framework: 'NIST SP 800-53', title: 'SC-5 Denial of Service Protection', description: 'Protect against or limit the effects of denial-of-service attacks, including resource exhaustion.', url: nistUrl('SC-5') },
+  'NIST-SC-7':  { framework: 'NIST SP 800-53', title: 'SC-7 Boundary Protection', description: 'Monitor and control communications at the external boundary and at key internal boundaries. Implement deny-all, permit-by-exception policies.', url: nistUrl('SC-7') },
+  'NIST-SC-8':  { framework: 'NIST SP 800-53', title: 'SC-8 Transmission Confidentiality and Integrity', description: 'Implement cryptographic mechanisms to prevent unauthorised disclosure or modification of information during transmission.', url: nistUrl('SC-8') },
+  'NIST-IA-2':  { framework: 'NIST SP 800-53', title: 'IA-2 Identification and Authentication', description: 'Uniquely identify and authenticate organisational users and processes acting on their behalf for system access.', url: nistUrl('IA-2') },
+  'NIST-IA-3':  { framework: 'NIST SP 800-53', title: 'IA-3 Device Identification and Authentication', description: 'Uniquely identify and authenticate devices before establishing connections, including VPN endpoints.', url: nistUrl('IA-3') },
+  'NIST-IA-5':  { framework: 'NIST SP 800-53', title: 'IA-5 Authenticator Management', description: 'Manage information system authenticators including passwords. Enforce complexity, minimum length, and rotation requirements.', url: nistUrl('IA-5') },
+  'NIST-AC-6':  { framework: 'NIST SP 800-53', title: 'AC-6 Least Privilege', description: 'Employ least privilege, allowing only authorised accesses for users (or processes) which are necessary to accomplish assigned tasks.', url: nistUrl('AC-6') },
+  'NIST-AC-7':  { framework: 'NIST SP 800-53', title: 'AC-7 Unsuccessful Logon Attempts', description: 'Enforce a limit on consecutive invalid login attempts, lock the account/node, and notify administrators.', url: nistUrl('AC-7') },
+  'NIST-AC-11': { framework: 'NIST SP 800-53', title: 'AC-11 Session Lock', description: 'Prevent further access to the system by initiating a session lock after a period of inactivity.', url: nistUrl('AC-11') },
+  'NIST-AU-2':  { framework: 'NIST SP 800-53', title: 'AU-2 Event Logging', description: 'Identify events types to be logged that are adequate to support post-hoc analysis of security incidents.', url: nistUrl('AU-2') },
+  'NIST-AU-8':  { framework: 'NIST SP 800-53', title: 'AU-8 Time Stamps', description: 'Use system clocks to generate time stamps for audit records, synchronised to an authoritative time source (NTP).', url: nistUrl('AU-8') },
+  'NIST-AU-9':  { framework: 'NIST SP 800-53', title: 'AU-9 Protection of Audit Information', description: 'Protect audit information and tools from unauthorised access, modification, and deletion.', url: nistUrl('AU-9') },
+  'NIST-SI-2':  { framework: 'NIST SP 800-53', title: 'SI-2 Flaw Remediation', description: 'Identify, report, and correct information system flaws. Install security-relevant software updates within defined time periods.', url: nistUrl('SI-2') },
+  'NIST-SI-3':  { framework: 'NIST SP 800-53', title: 'SI-3 Malicious Code Protection', description: 'Implement malicious code protection mechanisms at appropriate locations to detect and eradicate malicious code.', url: nistUrl('SI-3') },
+  'NIST-SI-4':  { framework: 'NIST SP 800-53', title: 'SI-4 System Monitoring', description: 'Monitor the system to detect attacks, indicators of potential attacks, and unauthorised access, use, and connections.', url: nistUrl('SI-4') },
+
+  // ── ISO/IEC 27001:2022 ───────────────────────────────────────────────────
+  'ISO27001-A.9':      { framework: 'ISO/IEC 27001', title: 'A.9 Access Control', description: 'Limit access to information and information processing facilities to authorised users, processes, and systems.', url: ISO_URL },
+  'ISO27001-A.9.2':    { framework: 'ISO/IEC 27001', title: 'A.9.2 User Access Management', description: 'Ensure authorised user access and prevent unauthorised access through formal provisioning and de-provisioning processes.', url: ISO_URL },
+  'ISO27001-A.9.4':    { framework: 'ISO/IEC 27001', title: 'A.9.4 System & Application Access Control', description: 'Prevent unauthorised access to systems and applications, including password management and session controls.', url: ISO_URL },
+  'ISO27001-A.10':     { framework: 'ISO/IEC 27001', title: 'A.10 Cryptography', description: 'Ensure proper and effective use of cryptography to protect the confidentiality, integrity, and availability of information.', url: ISO_URL },
+  'ISO27001-A.12.4':   { framework: 'ISO/IEC 27001', title: 'A.12.4 Logging and Monitoring', description: 'Record events, generate evidence, and monitor usage of systems to detect anomalies and support investigations.', url: ISO_URL },
+  'ISO27001-A.12.6':   { framework: 'ISO/IEC 27001', title: 'A.12.6 Technical Vulnerability Management', description: 'Prevent exploitation of technical vulnerabilities by obtaining timely information, assessing exposure, and taking appropriate action.', url: ISO_URL },
+  'ISO27001-A.13':     { framework: 'ISO/IEC 27001', title: 'A.13 Communications Security', description: 'Ensure the protection of information in networks and the protection of supporting infrastructure.', url: ISO_URL },
+  'ISO27001-A.13.1':   { framework: 'ISO/IEC 27001', title: 'A.13.1 Network Security Management', description: 'Manage and control networks to protect information in systems and applications. Apply appropriate controls on all network services.', url: ISO_URL },
+
+  // ── Other ────────────────────────────────────────────────────────────────
+  'BCP38': { framework: 'IETF BCP 38 / RFC 2827', title: 'Network Ingress Filtering', description: 'Defeating Denial of Service attacks which employ IP source address spoofing. ISPs and network operators should filter packets with spoofed source addresses at ingress points.', url: 'https://www.rfc-editor.org/rfc/rfc2827' },
+}
+
+// Framework badge colours
+const FRAMEWORK_COLOR: Record<string, string> = {
+  'CIS Firewall Benchmark': '#1565c0',
+  'NIST SP 800-53':         '#2e7d32',
+  'ISO/IEC 27001':          '#6a1b9a',
+  'IETF BCP 38 / RFC 2827': '#e65100',
+}
+
+// ---------------------------------------------------------------------------
+// ComplianceRefList — expandable accordion per reference
+// ---------------------------------------------------------------------------
+
+function ComplianceRefList({ refs }: { refs: string[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 0.5 }}>
+      {refs.map((ref) => {
+        const detail = COMPLIANCE_REF_DB[ref]
+        const isOpen = expanded === ref
+        const fwColor = detail ? FRAMEWORK_COLOR[detail.framework] ?? '#555' : '#555'
+
+        return (
+          <Box
+            key={ref}
+            sx={{
+              border: '1px solid',
+              borderColor: isOpen ? 'primary.light' : 'divider',
+              borderRadius: 1,
+              overflow: 'hidden',
+              transition: 'border-color 0.15s',
+            }}
+          >
+            {/* Header row */}
+            <Box
+              onClick={() => setExpanded(isOpen ? null : ref)}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+                cursor: 'pointer', bgcolor: isOpen ? 'action.selected' : 'transparent',
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+            >
+              <Chip
+                label={ref}
+                size="small"
+                sx={{ fontFamily: 'monospace', fontWeight: 700, bgcolor: fwColor, color: '#fff', fontSize: 11 }}
+              />
+              {detail ? (
+                <>
+                  <Typography variant="caption" fontWeight={600} sx={{ flex: 1 }}>
+                    {detail.title}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>
+                    {detail.framework}
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                  Unknown reference
+                </Typography>
+              )}
+              {isOpen ? <ExpandLessIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} /> : <ExpandMoreIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />}
+            </Box>
+
+            {/* Expanded detail */}
+            {isOpen && detail && (
+              <Box sx={{ px: 1.5, py: 1, bgcolor: 'action.hover', borderTop: '1px solid', borderColor: 'divider' }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  {detail.description}
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  href={detail.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ textTransform: 'none', fontSize: 12 }}
+                  startIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                >
+                  View full {detail.framework} documentation
+                </Button>
+              </Box>
+            )}
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Finding context dialog — full details + live config section
 // ---------------------------------------------------------------------------
 
@@ -451,11 +622,7 @@ function FindingContextDialog({
                 <Typography variant="body2" color="text.secondary" gutterBottom>
                   <strong>Compliance references</strong>
                 </Typography>
-                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                  {f.compliance_refs.map((ref) => (
-                    <Chip key={ref} label={ref} size="small" variant="outlined" />
-                  ))}
-                </Box>
+                <ComplianceRefList refs={f.compliance_refs} />
               </Box>
             )}
 
@@ -724,9 +891,24 @@ function FindingsTab() {
               )}
               {f.compliance_refs && f.compliance_refs.length > 0 && (
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1 }}>
-                  {f.compliance_refs.map((ref) => (
-                    <Chip key={ref} label={ref} size="small" variant="outlined" />
-                  ))}
+                  {f.compliance_refs.map((ref) => {
+                    const detail = COMPLIANCE_REF_DB[ref]
+                    const fwColor = detail ? FRAMEWORK_COLOR[detail.framework] ?? '#555' : '#555'
+                    return (
+                      <Tooltip key={ref} title={detail ? `${detail.title} — ${detail.framework}` : ref}>
+                        <Chip
+                          label={ref}
+                          size="small"
+                          component="a"
+                          href={detail?.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          clickable={!!detail}
+                          sx={{ fontFamily: 'monospace', fontWeight: 700, bgcolor: fwColor, color: '#fff', fontSize: 11 }}
+                        />
+                      </Tooltip>
+                    )
+                  })}
                 </Box>
               )}
               {f.suppressed_reason && (
