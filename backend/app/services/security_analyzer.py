@@ -24,6 +24,76 @@ class FindingDict(TypedDict):
 
 _PUBLIC_DNS = {"8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "208.67.222.222"}
 
+# Zone tokens that mean "match everything" regardless of adapter
+_WILD_ZONES = {"ANY", "ALL", "*", ""}
+
+
+def _normalize_rule(rule: dict) -> dict:
+    """Normalise a firewall rule dict to a consistent set of keys.
+
+    The mock adapter uses:   src_zone / dst_zone / action / enabled
+    The real Zyxel adapter
+    (show secure-policy) uses: _from_zone / _to_zone / _action / _enable
+
+    Returns a dict with canonical keys so every check works for both.
+    """
+    # ── action ────────────────────────────────────────────────────────────
+    raw_action = (
+        rule.get("action")
+        or rule.get("_action")
+        or rule.get("Action")
+        or ""
+    ).lower()
+    # Normalise synonyms → "allow" or "deny"
+    if raw_action in ("block", "reject", "drop"):
+        raw_action = "deny"
+
+    # ── zones ─────────────────────────────────────────────────────────────
+    def _get_zone(keys):
+        for k in keys:
+            v = rule.get(k)
+            if v is not None:
+                return str(v).upper()
+        return ""
+
+    src = _get_zone(["src_zone", "_from_zone", "from_zone", "from", "src",
+                     "source_zone", "SourceZone", "Source"])
+    dst = _get_zone(["dst_zone", "_to_zone", "to_zone", "to", "dst",
+                     "dest_zone", "DestinationZone", "Destination"])
+
+    # Interface names like "wan1"/"WAN1"/"lan1" → normalise to zone class
+    if src.startswith("WAN"):
+        src = "WAN"
+    elif src.startswith("LAN"):
+        src = "LAN"
+    elif src.startswith("DMZ"):
+        src = "DMZ"
+
+    if dst.startswith("WAN"):
+        dst = "WAN"
+    elif dst.startswith("LAN"):
+        dst = "LAN"
+    elif dst.startswith("DMZ"):
+        dst = "DMZ"
+
+    # ── enabled ───────────────────────────────────────────────────────────
+    raw_en = rule.get("enabled", rule.get("_enable", rule.get("Enable", rule.get("Status", True))))
+    if isinstance(raw_en, str):
+        enabled = raw_en.lower() not in ("off", "false", "no", "0", "disable", "disabled")
+    elif isinstance(raw_en, int):
+        enabled = raw_en != 0
+    else:
+        enabled = bool(raw_en)
+
+    return {
+        "action": raw_action,
+        "src_zone": src,
+        "dst_zone": dst,
+        "enabled": enabled,
+        "name": rule.get("name") or rule.get("Name") or rule.get("_name") or "",
+        "service": rule.get("service") or rule.get("_service"),
+    }
+
 
 def _finding(
     category: str,
@@ -54,18 +124,19 @@ def _finding(
 def check_wan_to_lan_allow(config: dict) -> Optional[FindingDict]:
     """WAN→LAN allow firewall rule is a critical risk."""
     for i, rule in enumerate(config.get("firewall_rules", [])):
+        r = _normalize_rule(rule)
         if (
-            rule.get("src_zone", "").upper() == "WAN"
-            and rule.get("dst_zone", "").upper() == "LAN"
-            and rule.get("action", "").lower() == "allow"
-            and rule.get("enabled", True)
+            r["src_zone"] == "WAN"
+            and r["dst_zone"] == "LAN"
+            and r["action"] == "allow"
+            and r["enabled"]
         ):
             return _finding(
                 category="permissive_rule",
                 severity="critical",
                 title="WAN-to-LAN allow rule detected",
                 description=(
-                    f"Firewall rule '{rule.get('name', 'unknown')}' permits all traffic "
+                    f"Firewall rule '{r['name'] or 'unknown'}' permits all traffic "
                     "from the WAN zone directly into the LAN zone. This exposes internal "
                     "hosts to the internet."
                 ),
@@ -83,24 +154,21 @@ def check_no_deny_by_default(config: dict) -> Optional[FindingDict]:
     """No explicit deny-all / default-deny rule present."""
     rules = config.get("firewall_rules", [])
 
-    # Zone names that mean "all traffic" (any representation)
-    _WILD = {"ANY", "ALL", "*", ""}
-
-    def _is_deny_default(r: dict) -> bool:
-        if r.get("action", "").lower() != "deny":
+    def _is_deny_default(raw: dict) -> bool:
+        r = _normalize_rule(raw)
+        if r["action"] != "deny":
             return False
-        if not r.get("enabled", True):
+        if not r["enabled"]:
             return False
-        src = r.get("src_zone", "").upper()
-        dst = r.get("dst_zone", "").upper()
-        # Catch-all: ANY/ALL → ANY/ALL
-        if src in _WILD and dst in _WILD:
+        src, dst = r["src_zone"], r["dst_zone"]
+        # ANY→ANY catch-all
+        if src in _WILD_ZONES and dst in _WILD_ZONES:
             return True
-        # WAN (or wildcard) → LAN (or wildcard): covers the most important direction
-        if src in (_WILD | {"WAN"}) and dst in (_WILD | {"LAN"}):
+        # WAN (or wildcard) → LAN/DMZ (or wildcard)
+        if src in (_WILD_ZONES | {"WAN"}) and dst in (_WILD_ZONES | {"LAN", "DMZ"}):
             return True
-        # WAN (or wildcard) → ANY destination: blocks all inbound WAN traffic
-        if src in (_WILD | {"WAN"}) and dst in _WILD:
+        # WAN (or wildcard) → any destination (blocks all inbound WAN)
+        if src in (_WILD_ZONES | {"WAN"}) and dst in _WILD_ZONES:
             return True
         return False
 
@@ -157,10 +225,11 @@ def check_http_wan_reachable(config: dict) -> Optional[FindingDict]:
         return None
     # If any WAN→LAN allow rule references HTTP or is generic
     for i, rule in enumerate(config.get("firewall_rules", [])):
+        r = _normalize_rule(rule)
         if (
-            rule.get("src_zone", "").upper() == "WAN"
-            and rule.get("action", "").lower() == "allow"
-            and rule.get("enabled", True)
+            r["src_zone"] == "WAN"
+            and r["action"] == "allow"
+            and r["enabled"]
         ):
             return _finding(
                 category="exposed_service",
@@ -206,19 +275,19 @@ def check_default_admin_username(config: dict) -> Optional[FindingDict]:
 def check_any_to_any_allow(config: dict) -> Optional[FindingDict]:
     """Any-to-any allow rule is present."""
     for i, rule in enumerate(config.get("firewall_rules", [])):
-        src = rule.get("src_zone", "").upper()
-        dst = rule.get("dst_zone", "").upper()
+        r = _normalize_rule(rule)
         if (
-            src == "ANY" and dst == "ANY"
-            and rule.get("action", "").lower() == "allow"
-            and rule.get("enabled", True)
+            r["src_zone"] in _WILD_ZONES
+            and r["dst_zone"] in _WILD_ZONES
+            and r["action"] == "allow"
+            and r["enabled"]
         ):
             return _finding(
                 category="permissive_rule",
                 severity="high",
                 title="Any-to-any allow rule detected",
                 description=(
-                    f"Rule '{rule.get('name', 'unknown')}' allows traffic between all "
+                    f"Rule '{r['name'] or 'unknown'}' allows traffic between all "
                     "zones without restriction. This essentially disables the firewall."
                 ),
                 recommendation=(
@@ -364,7 +433,7 @@ def check_multiple_admin_accounts(config: dict) -> Optional[FindingDict]:
 
 def check_disabled_rules_present(config: dict) -> Optional[FindingDict]:
     """Disabled firewall rules are still present in config."""
-    disabled = [r for r in config.get("firewall_rules", []) if not r.get("enabled", True)]
+    disabled = [r for r in config.get("firewall_rules", []) if not _normalize_rule(r)["enabled"]]
     if disabled:
         return _finding(
             category="permissive_rule",
@@ -1195,10 +1264,11 @@ def check_ssh_from_wan(config: dict) -> Optional[FindingDict]:
     if not ssh_svc_names:
         return None
     for i, rule in enumerate(config.get("firewall_rules", [])):
+        r = _normalize_rule(rule)
         if (
-            rule.get("src_zone", "").upper() == "WAN"
-            and rule.get("action", "").lower() == "allow"
-            and rule.get("enabled", True)
+            r["src_zone"] == "WAN"
+            and r["action"] == "allow"
+            and r["enabled"]
         ):
             return _finding(
                 category="exposed_service",
@@ -1227,19 +1297,20 @@ def check_ssh_from_wan(config: dict) -> Optional[FindingDict]:
 def check_unrestricted_outbound(config: dict) -> Optional[FindingDict]:
     """LAN-to-WAN allow rule with no service restriction (all ports permitted)."""
     for i, rule in enumerate(config.get("firewall_rules", [])):
+        r = _normalize_rule(rule)
         if (
-            rule.get("src_zone", "").upper() == "LAN"
-            and rule.get("dst_zone", "").upper() == "WAN"
-            and rule.get("action", "").lower() == "allow"
-            and rule.get("enabled", True)
-            and not rule.get("service")   # no service field = all services
+            r["src_zone"] == "LAN"
+            and r["dst_zone"] == "WAN"
+            and r["action"] == "allow"
+            and r["enabled"]
+            and not r["service"]   # no service field = all services
         ):
             return _finding(
                 category="permissive_rule",
                 severity="low",
                 title="Unrestricted outbound traffic (LAN→WAN, all services)",
                 description=(
-                    f"Rule '{rule.get('name', 'unknown')}' allows all traffic from "
+                    f"Rule '{r['name'] or 'unknown'}' allows all traffic from "
                     "LAN to WAN without service restriction. This permits any protocol "
                     "and port egress, making it easier for malware to establish "
                     "outbound C2 channels and for data to be exfiltrated."
