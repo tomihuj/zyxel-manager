@@ -15,7 +15,7 @@ import CodeIcon from '@mui/icons-material/Code'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDeviceConfig, patchDeviceConfig } from '../api/devices'
 import { api } from '../api/client'
-import { useParameterSetsStore, extractConfigRows, cellStr } from '../store/parameterSets'
+import { useParameterSetsStore, extractConfigRows, cellStr, type ParameterSet } from '../store/parameterSets'
 
 const SECTIONS = [
   'system', 'interfaces', 'routing', 'nat', 'firewall_rules',
@@ -191,18 +191,18 @@ function ConfigTableView({
   paramSet,
 }: {
   rows: Record<string, unknown>[]
-  paramSet: ReturnType<ReturnType<typeof useParameterSetsStore>['getSetForSection']>
+  paramSet: ParameterSet | undefined
 }) {
   // All keys present in the data
   const allKeys = Array.from(new Set(rows.flatMap((r) => Object.keys(r))))
 
   // Visible param set columns that exist in data, then extra keys not in param set
-  const psCols = paramSet ? paramSet.columns.filter((c) => c.visible && allKeys.includes(c.key)) : []
-  const psKeys = new Set(psCols.map((c) => c.key))
+  const psCols = paramSet ? paramSet.columns.filter((c: { key: string; visible: boolean }) => c.visible && allKeys.includes(c.key)) : []
+  const psKeys = new Set(psCols.map((c: { key: string }) => c.key))
   const extraKeys = allKeys.filter((k) => !psKeys.has(k))
 
   const cols: { key: string; label: string }[] = [
-    ...psCols.map((c) => ({ key: c.key, label: c.label })),
+    ...psCols.map((c: { key: string; label: string }) => ({ key: c.key, label: c.label })),
     ...extraKeys.map((k) => ({ key: k, label: k })),
   ]
 
