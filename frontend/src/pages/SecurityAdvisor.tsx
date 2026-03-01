@@ -10,6 +10,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid'
 import type { GridColDef } from '@mui/x-data-grid'
 import SecurityIcon from '@mui/icons-material/Security'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import RestoreIcon from '@mui/icons-material/Restore'
@@ -862,12 +863,29 @@ function ScansTab() {
 
 export default function SecurityAdvisor() {
   const [tab, setTab] = useState(0)
+  const qc = useQueryClient()
+  const [refreshing, setRefreshing] = useState(false)
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    await qc.invalidateQueries({ queryKey: ['security-summary'] })
+    await qc.invalidateQueries({ queryKey: ['security-scores'] })
+    await qc.invalidateQueries({ queryKey: ['security-findings'] })
+    await qc.invalidateQueries({ queryKey: ['security-scans'] })
+    setRefreshing(false)
+  }
 
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <SecurityIcon color="error" />
         <Typography variant="h5" fontWeight={700}>Security Advisor</Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title="Refresh">
+          <IconButton onClick={handleRefresh} disabled={refreshing}>
+            <RefreshIcon sx={{ transition: 'transform 0.4s', transform: refreshing ? 'rotate(360deg)' : 'none' }} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 1, borderBottom: 1, borderColor: 'divider' }}>
