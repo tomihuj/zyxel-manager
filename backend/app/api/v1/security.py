@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
@@ -25,7 +26,7 @@ class SuppressBody(BaseModel):
 
 
 class TriggerScanBody(BaseModel):
-    device_id: Optional[str] = None
+    device_ids: list[str] = []  # empty = scan all devices
 
 
 # ---------------------------------------------------------------------------
@@ -279,15 +280,37 @@ def get_scan(scan_id: uuid.UUID, current: CurrentUser, session: DBSession):
 @router.post("/scans", status_code=202)
 def trigger_scan(body: TriggerScanBody, current: CurrentUser, session: DBSession):
     from app.tasks.security import run_security_scan
-    device_ids = [body.device_id] if body.device_id else None
+    device_ids = body.device_ids if body.device_ids else None
     task = run_security_scan.delay(
         device_ids=device_ids,
         triggered_by="manual",
         triggered_by_user=str(current.id),
     )
     write_audit(session, "trigger_security_scan", current, None, None,
-                {"device_id": body.device_id})
+                {"device_ids": body.device_ids})
     return {"task_id": task.id}
+
+
+@router.post("/scans/{scan_id}/cancel", status_code=200)
+def cancel_scan(scan_id: uuid.UUID, current: CurrentUser, session: DBSession):
+    scan = session.get(SecurityScan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status != "running":
+        raise HTTPException(status_code=400, detail=f"Scan is not running (status: {scan.status})")
+
+    # Revoke the Celery task
+    if scan.celery_task_id:
+        from app.tasks.celery_app import celery_app
+        celery_app.control.revoke(scan.celery_task_id, terminate=True, signal="SIGTERM")
+
+    scan.status = "cancelled"
+    scan.completed_at = datetime.now(timezone.utc)
+    session.add(scan)
+    session.commit()
+
+    write_audit(session, "cancel_security_scan", current, None, None, {"scan_id": str(scan_id)})
+    return {"cancelled": True}
 
 
 # ---------------------------------------------------------------------------

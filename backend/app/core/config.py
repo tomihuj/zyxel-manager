@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     admin_email: str = "admin@example.com"
     admin_username: str = "admin"
-    admin_password: str = "Admin1234!"
+    admin_password: str = "admin123"
 
     # SMTP settings for email alert delivery
     smtp_host: str = ""

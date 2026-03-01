@@ -36,6 +36,7 @@ def run_security_scan(
             triggered_by_user=uuid.UUID(triggered_by_user) if triggered_by_user else None,
             status="running",
             started_at=datetime.now(timezone.utc),
+            celery_task_id=self.request.id,
         )
         session.add(scan)
         session.commit()
@@ -59,6 +60,11 @@ def run_security_scan(
         new_critical_alerts: list[dict] = []
 
         for device in devices:
+            # Check if cancelled between devices
+            session.refresh(scan)
+            if scan.status == "cancelled":
+                return
+
             try:
                 _scan_device(session, device, scan, total_scores, new_critical_alerts)
             except Exception as exc:

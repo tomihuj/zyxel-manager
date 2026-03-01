@@ -56,9 +56,9 @@ def _normalize_rule(rule: dict) -> dict:
                 return str(v).upper()
         return ""
 
-    src = _get_zone(["src_zone", "_from_zone", "from_zone", "from", "src",
+    src = _get_zone(["src_zone", "_from_zone", "_from", "from_zone", "from", "src",
                      "source_zone", "SourceZone", "Source"])
-    dst = _get_zone(["dst_zone", "_to_zone", "to_zone", "to", "dst",
+    dst = _get_zone(["dst_zone", "_to_zone", "_to", "to_zone", "to", "dst",
                      "dest_zone", "DestinationZone", "Destination"])
 
     # Interface names like "wan1"/"WAN1"/"lan1" → normalise to zone class
@@ -92,6 +92,34 @@ def _normalize_rule(rule: dict) -> dict:
         "enabled": enabled,
         "name": rule.get("name") or rule.get("Name") or rule.get("_name") or "",
         "service": rule.get("service") or rule.get("_service"),
+    }
+
+
+def _unwrap_cli_section(raw) -> list:
+    """Unwrap the Zyxel zysh-cgi CLI wrapper pattern.
+
+    The real Zyxel adapter returns sections like::
+
+        "firewall_rules": [{"_secure_policy_rule": [{...rule1...}, ...]}]
+
+    i.e. a one-element outer list containing a single dict whose only (or
+    primary) value is the real list of items.  Unwrap it so every check gets
+    the flat list of rule/object dicts directly.
+    """
+    if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], dict):
+        return raw
+    first = raw[0]
+    arr_values = [v for v in first.values() if isinstance(v, list)]
+    if len(arr_values) == 1:
+        return arr_values[0]
+    return raw
+
+
+def _preprocess_config(config: dict) -> dict:
+    """Unwrap all list sections that use the Zyxel CLI wrapper format."""
+    return {
+        k: _unwrap_cli_section(v) if isinstance(v, list) else v
+        for k, v in config.items()
     }
 
 
@@ -1390,6 +1418,7 @@ ALL_CHECKS = [
 
 def analyze_config(config: dict) -> list[FindingDict]:
     """Run all checks and return a list of findings (non-None results)."""
+    config = _preprocess_config(config)
     findings = []
     for check_fn in ALL_CHECKS:
         try:

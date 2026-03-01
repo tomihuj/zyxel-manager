@@ -18,7 +18,8 @@ class SecurityScan(SQLModel, table=True):
         default=None,
         sa_column=Column(sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
     )
-    status: str = Field(default="running", max_length=16)  # running | completed | failed
+    status: str = Field(default="running", max_length=16)  # running | completed | failed | cancelled
+    celery_task_id: Optional[str] = Field(default=None, max_length=256)
     findings_count: int = Field(default=0)
     critical_count: int = Field(default=0)
     high_count: int = Field(default=0)

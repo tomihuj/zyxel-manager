@@ -7,12 +7,14 @@ import {
   TextField, Select, MenuItem, FormControl, InputLabel, CircularProgress,
   Paper, Tooltip, IconButton, Collapse, Divider, Stack, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Autocomplete,
 } from '@mui/material'
 import { DataGrid } from '@mui/x-data-grid'
 import type { GridColDef } from '@mui/x-data-grid'
 import SecurityIcon from '@mui/icons-material/Security'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import StopIcon from '@mui/icons-material/Stop'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import RestoreIcon from '@mui/icons-material/Restore'
 import BuildIcon from '@mui/icons-material/Build'
@@ -24,7 +26,7 @@ import SettingsIcon from '@mui/icons-material/Settings'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import {
   listFindings, suppressFinding, reopenFinding, remediateFinding,
-  listScans, triggerScan, listScores, getSecuritySummary, getFindingContext,
+  listScans, triggerScan, cancelScan, listScores, getSecuritySummary, getFindingContext,
 } from '../api/security'
 import { listDevices } from '../api/devices'
 import { useToastStore } from '../store/toast'
@@ -113,10 +115,16 @@ function OverviewTab() {
     refetchInterval: 30_000,
   })
 
+  const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
+  const [scanDevices, setScanDevices] = useState<{ id: string; name: string }[]>([])
+
   const scanMut = useMutation({
-    mutationFn: () => triggerScan(null),
+    mutationFn: () => triggerScan(scanDevices.length > 0 ? scanDevices.map((d) => d.id) : []),
     onSuccess: () => {
-      push('Fleet security scan triggered — results will update shortly')
+      const label = scanDevices.length === 0
+        ? 'Fleet scan triggered — results will update shortly'
+        : `Scan triggered for ${scanDevices.length === 1 ? scanDevices[0].name : `${scanDevices.length} devices`}`
+      push(label)
       setTimeout(() => {
         qc.invalidateQueries({ queryKey: ['security-summary'] })
         qc.invalidateQueries({ queryKey: ['security-scores'] })
@@ -135,15 +143,39 @@ function OverviewTab() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+      <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'flex-start', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <Autocomplete
+          multiple
+          size="small"
+          options={devices}
+          getOptionLabel={(d) => d.name}
+          isOptionEqualToValue={(a, b) => a.id === b.id}
+          value={scanDevices}
+          onChange={(_, val) => setScanDevices(val)}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Firewalls to scan"
+              placeholder={scanDevices.length === 0 ? 'All devices (fleet)' : ''}
+            />
+          )}
+          renderTags={(value, getTagProps) =>
+            value.map((d, i) => (
+              <Chip label={d.name} size="small" {...getTagProps({ index: i })} key={d.id} />
+            ))
+          }
+          sx={{ minWidth: 280 }}
+          noOptionsText="No devices found"
+        />
         <Button
           variant="contained"
           startIcon={scanMut.isPending ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
           onClick={() => scanMut.mutate()}
           disabled={scanMut.isPending}
           color="primary"
+          sx={{ mt: 0.5, whiteSpace: 'nowrap' }}
         >
-          Scan Now
+          {scanDevices.length === 0 ? 'Scan All' : `Scan ${scanDevices.length} Device${scanDevices.length > 1 ? 's' : ''}`}
         </Button>
       </Box>
 
@@ -626,6 +658,14 @@ function FindingContextDialog({
               </Box>
             )}
 
+            {f.status === 'resolved' && (
+              <Alert severity="success" icon={<CheckCircleOutlineIcon />}>
+                <strong>Resolved</strong>
+                {f.resolved_at && ` on ${new Date(f.resolved_at).toLocaleString()}`}
+                {' '}— this issue is no longer detected. The configuration shown below reflects the <strong>current</strong> state of the device.
+              </Alert>
+            )}
+
             {f.suppressed_reason && (
               <Alert severity="warning">
                 <strong>Suppression reason:</strong> {f.suppressed_reason}
@@ -637,7 +677,7 @@ function FindingContextDialog({
             <Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                 <Typography variant="subtitle2" fontWeight={700}>
-                  Active Configuration
+                  {f.status === 'resolved' ? 'Current Configuration' : 'Active Configuration'}
                 </Typography>
                 {section && (
                   <Typography variant="caption" color="text.secondary">
@@ -870,14 +910,43 @@ function FindingsTab() {
         </FormControl>
       </Box>
 
-      {/* Expanded row detail */}
+      <Paper>
+        <DataGrid
+          rows={findings}
+          columns={columns}
+          loading={isLoading}
+          autoHeight
+          pageSizeOptions={[25, 50, 100]}
+          initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
+          disableRowSelectionOnClick
+          getRowClassName={(p) =>
+            p.row.status === 'suppressed' || p.row.status === 'resolved'
+              ? 'finding-dimmed'
+              : expandedRow === p.row.id ? 'finding-expanded' : ''
+          }
+          sx={{
+            '& .finding-dimmed': { opacity: 0.55 },
+            '& .finding-expanded': { bgcolor: 'action.selected' },
+          }}
+        />
+      </Paper>
+
+      {/* Expanded row detail — shown below the grid, clearly labelled */}
       {expandedRow && (() => {
         const f = findings.find((x) => x.id === expandedRow)
         if (!f) return null
         return (
-          <Card sx={{ mb: 2, bgcolor: 'action.hover' }}>
+          <Card sx={{ mt: 1, border: 2, borderColor: 'primary.main' }} variant="outlined">
             <CardContent>
-              <Typography variant="subtitle2" gutterBottom>{f.title}</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <Chip label={f.severity} size="small" color={SEVERITY_MUI[f.severity] ?? 'default'} sx={{ textTransform: 'capitalize' }} />
+                <Chip label={CATEGORY_LABELS[f.category] ?? f.category} size="small" variant="outlined" />
+                <Chip label={f.status} size="small" color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : 'success'} variant="outlined" sx={{ textTransform: 'capitalize' }} />
+                <Typography variant="subtitle2" fontWeight={700} sx={{ ml: 0.5 }}>{f.title}</Typography>
+                <IconButton size="small" sx={{ ml: 'auto' }} onClick={() => setExpandedRow(null)}>
+                  <ExpandLessIcon fontSize="small" />
+                </IconButton>
+              </Box>
               <Typography variant="body2" color="text.secondary" gutterBottom>
                 <strong>Description:</strong> {f.description}
               </Typography>
@@ -920,26 +989,6 @@ function FindingsTab() {
           </Card>
         )
       })()}
-
-      <Paper>
-        <DataGrid
-          rows={findings}
-          columns={columns}
-          loading={isLoading}
-          autoHeight
-          pageSizeOptions={[25, 50, 100]}
-          initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
-          disableRowSelectionOnClick
-          getRowClassName={(p) =>
-            p.row.status === 'suppressed' || p.row.status === 'resolved'
-              ? 'finding-dimmed'
-              : ''
-          }
-          sx={{
-            '& .finding-dimmed': { opacity: 0.55 },
-          }}
-        />
-      </Paper>
 
       {/* Finding context dialog */}
       <FindingContextDialog
@@ -1143,7 +1192,7 @@ function ScansTab() {
   const { push } = useToastStore()
   const qc = useQueryClient()
 
-  const [scanDevice, setScanDevice] = useState('')
+  const [scanDevices, setScanDevices] = useState<{ id: string; name: string }[]>([])
   const [expandedScan, setExpandedScan] = useState<string | null>(null)
 
   const { data: scans = [], isLoading } = useQuery({
@@ -1155,12 +1204,26 @@ function ScansTab() {
   const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
 
   const scanMut = useMutation({
-    mutationFn: () => triggerScan(scanDevice || null),
+    mutationFn: () => triggerScan(scanDevices.length > 0 ? scanDevices.map((d) => d.id) : []),
     onSuccess: () => {
-      push('Scan triggered')
+      const label = scanDevices.length === 0
+        ? 'Fleet scan triggered'
+        : scanDevices.length === 1
+          ? `Scan triggered for ${scanDevices[0].name}`
+          : `Scan triggered for ${scanDevices.length} devices`
+      push(label)
       setTimeout(() => qc.invalidateQueries({ queryKey: ['security-scans'] }), 3000)
     },
     onError: () => push('Failed to trigger scan', 'error'),
+  })
+
+  const cancelMut = useMutation({
+    mutationFn: (id: string) => cancelScan(id),
+    onSuccess: () => {
+      push('Scan cancelled')
+      qc.invalidateQueries({ queryKey: ['security-scans'] })
+    },
+    onError: () => push('Failed to cancel scan', 'error'),
   })
 
   function toggleExpand(id: string) {
@@ -1176,23 +1239,38 @@ function ScansTab() {
   return (
     <Box>
       {/* Trigger controls */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center', flexWrap: 'wrap' }}>
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel>Device (optional)</InputLabel>
-          <Select label="Device (optional)" value={scanDevice} onChange={(e) => setScanDevice(e.target.value)}>
-            <MenuItem value="">Fleet (all devices)</MenuItem>
-            {devices.map((d) => (
-              <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+      <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Autocomplete
+          multiple
+          size="small"
+          options={devices}
+          getOptionLabel={(d) => d.name}
+          isOptionEqualToValue={(a, b) => a.id === b.id}
+          value={scanDevices}
+          onChange={(_, val) => setScanDevices(val)}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Firewalls to scan"
+              placeholder={scanDevices.length === 0 ? 'All devices (fleet)' : ''}
+            />
+          )}
+          renderTags={(value, getTagProps) =>
+            value.map((d, i) => (
+              <Chip label={d.name} size="small" {...getTagProps({ index: i })} key={d.id} />
+            ))
+          }
+          sx={{ minWidth: 300 }}
+          noOptionsText="No devices found"
+        />
         <Button
           variant="contained"
           startIcon={scanMut.isPending ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
           onClick={() => scanMut.mutate()}
           disabled={scanMut.isPending}
+          sx={{ mt: 0.5 }}
         >
-          Trigger Scan
+          {scanDevices.length === 0 ? 'Scan All' : `Scan ${scanDevices.length} Device${scanDevices.length > 1 ? 's' : ''}`}
         </Button>
       </Box>
 
@@ -1245,9 +1323,32 @@ function ScansTab() {
                 <Chip
                   label={scan.status}
                   size="small"
-                  color={scan.status === 'completed' ? 'success' : scan.status === 'running' ? 'info' : 'error'}
+                  color={
+                    scan.status === 'completed' ? 'success'
+                    : scan.status === 'running' ? 'info'
+                    : scan.status === 'cancelled' ? 'default'
+                    : 'error'
+                  }
                   sx={{ textTransform: 'capitalize', flexShrink: 0 }}
                 />
+
+                {/* Cancel button — only for running scans */}
+                {scan.status === 'running' && (
+                  <Tooltip title="Stop scan">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      disabled={cancelMut.isPending}
+                      onClick={(e) => { e.stopPropagation(); cancelMut.mutate(scan.id) }}
+                      sx={{ flexShrink: 0 }}
+                    >
+                      {cancelMut.isPending && cancelMut.variables === scan.id
+                        ? <CircularProgress size={16} color="error" />
+                        : <StopIcon fontSize="small" />
+                      }
+                    </IconButton>
+                  </Tooltip>
+                )}
 
                 {/* Severity counts */}
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flexGrow: 1 }}>

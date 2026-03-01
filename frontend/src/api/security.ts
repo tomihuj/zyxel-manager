@@ -32,8 +32,11 @@ export const listScans = () =>
 export const getScan = (id: string) =>
   api.get<SecurityScan>(`/security/scans/${id}`).then((r) => r.data)
 
-export const triggerScan = (device_id?: string | null) =>
-  api.post<{ task_id: string }>('/security/scans', { device_id: device_id ?? null }).then((r) => r.data)
+export const triggerScan = (device_ids?: string[]) =>
+  api.post<{ task_id: string }>('/security/scans', { device_ids: device_ids ?? [] }).then((r) => r.data)
+
+export const cancelScan = (id: string) =>
+  api.post<{ cancelled: boolean }>(`/security/scans/${id}/cancel`).then((r) => r.data)
 
 export const listScores = () =>
   api.get<DeviceRiskScore[]>('/security/scores').then((r) => r.data)

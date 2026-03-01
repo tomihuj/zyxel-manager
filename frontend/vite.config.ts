@@ -9,5 +9,9 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://backend:8000', changeOrigin: true },
     },
+    watch: {
+      usePolling: true,   // required for Docker Desktop on macOS
+      interval: 300,
+    },
   },
 })
