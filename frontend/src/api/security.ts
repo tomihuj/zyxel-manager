@@ -12,6 +12,11 @@ export const listFindings = (params?: {
 export const getFinding = (id: string) =>
   api.get<SecurityFinding>(`/security/findings/${id}`).then((r) => r.data)
 
+export const getFindingContext = (id: string) =>
+  api.get<{ finding: SecurityFinding; section: string; config: Record<string, unknown> }>(
+    `/security/findings/${id}/context`,
+  ).then((r) => r.data)
+
 export const suppressFinding = (id: string, reason: string) =>
   api.put<SecurityFinding>(`/security/findings/${id}/suppress`, { reason }).then((r) => r.data)
 

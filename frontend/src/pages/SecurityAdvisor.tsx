@@ -18,9 +18,10 @@ import BuildIcon from '@mui/icons-material/Build'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import {
   listFindings, suppressFinding, reopenFinding, remediateFinding,
-  listScans, triggerScan, listScores, getSecuritySummary,
+  listScans, triggerScan, listScores, getSecuritySummary, getFindingContext,
 } from '../api/security'
 import { listDevices } from '../api/devices'
 import { useToastStore } from '../store/toast'
@@ -258,6 +259,202 @@ function OverviewTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Finding context dialog — full details + live config section
+// ---------------------------------------------------------------------------
+
+function FindingContextDialog({
+  findingId,
+  onClose,
+}: {
+  findingId: string | null
+  onClose: () => void
+}) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['security-finding-context', findingId],
+    queryFn: () => getFindingContext(findingId!),
+    enabled: !!findingId,
+  })
+
+  const f = data?.finding
+  const section = data?.section
+  const config = data?.config
+
+  // Render config as a nicely formatted section-aware view
+  function renderConfig() {
+    if (!config) return null
+    if ((config as any)._error) {
+      return (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          Could not fetch config: {(config as any)._error}
+        </Alert>
+      )
+    }
+
+    // For list-type sections (firewall_rules, nat, service_objects, etc.) render a table-like view
+    if (Array.isArray(config)) {
+      if (config.length === 0) {
+        return <Typography variant="body2" color="text.secondary">No entries in this section.</Typography>
+      }
+      return (
+        <Stack spacing={0.75} sx={{ mt: 1 }}>
+          {(config as Record<string, unknown>[]).map((item, i) => (
+            <Box
+              key={i}
+              sx={{
+                p: 1.5, borderRadius: 1, border: '1px solid',
+                borderColor: 'divider', bgcolor: 'background.paper',
+                fontFamily: 'monospace', fontSize: 12,
+                display: 'flex', flexWrap: 'wrap', gap: 1,
+              }}
+            >
+              {Object.entries(item).map(([k, v]) => (
+                <Box key={k}>
+                  <Typography component="span" variant="caption" color="text.secondary">{k}: </Typography>
+                  <Typography component="span" variant="caption" fontWeight={600}>
+                    {v === null ? 'null' : v === true ? 'true' : v === false ? 'false' : String(v)}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          ))}
+        </Stack>
+      )
+    }
+
+    // For object sections, render key-value pairs
+    return (
+      <Box
+        component="pre"
+        sx={{
+          mt: 1, p: 1.5, borderRadius: 1, border: '1px solid',
+          borderColor: 'divider', bgcolor: 'action.hover',
+          fontSize: 12, fontFamily: 'monospace',
+          overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          maxHeight: 300, overflowY: 'auto',
+        }}
+      >
+        {JSON.stringify(config, null, 2)}
+      </Box>
+    )
+  }
+
+  return (
+    <Dialog open={!!findingId} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle sx={{ pb: 1 }}>
+        Finding Details
+        {f && (
+          <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+            <Chip
+              label={f.severity}
+              size="small"
+              color={SEVERITY_MUI[f.severity] ?? 'default'}
+              sx={{ textTransform: 'capitalize' }}
+            />
+            <Chip label={CATEGORY_LABELS[f.category] ?? f.category} size="small" variant="outlined" />
+            <Chip
+              label={f.status}
+              size="small"
+              color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : 'success'}
+              variant="outlined"
+              sx={{ textTransform: 'capitalize' }}
+            />
+          </Box>
+        )}
+      </DialogTitle>
+
+      <DialogContent dividers>
+        {isLoading && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress />
+          </Box>
+        )}
+        {isError && <Alert severity="error">Failed to load finding details.</Alert>}
+
+        {f && (
+          <Stack spacing={2}>
+            {/* Core fields */}
+            <Box>
+              <Typography variant="subtitle2" fontWeight={700}>{f.title}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Device: {f.device_name ?? f.device_id}
+                {f.first_seen && ` · First seen: ${new Date(f.first_seen).toLocaleString()}`}
+                {f.last_seen && ` · Last seen: ${new Date(f.last_seen).toLocaleString()}`}
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                <strong>Description</strong>
+              </Typography>
+              <Typography variant="body2">{f.description}</Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                <strong>Recommendation</strong>
+              </Typography>
+              <Typography variant="body2">{f.recommendation}</Typography>
+            </Box>
+
+            {f.config_path && (
+              <Box>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  <strong>Config path</strong>
+                </Typography>
+                <Typography variant="body2" fontFamily="monospace" sx={{ bgcolor: 'action.hover', px: 1, py: 0.5, borderRadius: 1, display: 'inline-block' }}>
+                  {f.config_path}
+                </Typography>
+              </Box>
+            )}
+
+            {f.compliance_refs && f.compliance_refs.length > 0 && (
+              <Box>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  <strong>Compliance references</strong>
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                  {f.compliance_refs.map((ref) => (
+                    <Chip key={ref} label={ref} size="small" variant="outlined" />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {f.suppressed_reason && (
+              <Alert severity="warning">
+                <strong>Suppression reason:</strong> {f.suppressed_reason}
+              </Alert>
+            )}
+
+            {/* Live config section */}
+            <Divider />
+            <Box>
+              <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                Active Configuration
+                {section && (
+                  <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                    (section: <code>{section}</code>)
+                  </Typography>
+                )}
+              </Typography>
+              {isLoading
+                ? <CircularProgress size={20} />
+                : renderConfig()
+              }
+            </Box>
+          </Stack>
+        )}
+      </DialogContent>
+
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
 // Findings tab
 // ---------------------------------------------------------------------------
 
@@ -274,6 +471,7 @@ function FindingsTab() {
   const [suppressTarget, setSuppressTarget] = useState<SecurityFinding | null>(null)
   const [suppressReason, setSuppressReason] = useState('')
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  const [contextFindingId, setContextFindingId] = useState<string | null>(null)
 
   const { data: findings = [], isLoading } = useQuery({
     queryKey: ['security-findings', filterSeverity, filterCategory, filterStatus, filterDevice],
@@ -361,12 +559,17 @@ function FindingsTab() {
       valueGetter: (v) => new Date(v).toLocaleString(),
     },
     {
-      field: 'actions', headerName: '', width: 130, sortable: false,
+      field: 'actions', headerName: '', width: 160, sortable: false,
       renderCell: (p) => {
         const f: SecurityFinding = p.row
         return (
           <Box sx={{ display: 'flex', gap: 0.5 }}>
-            <Tooltip title="Expand details">
+            <Tooltip title="View details & active config">
+              <IconButton size="small" color="info" onClick={() => setContextFindingId(f.id)}>
+                <InfoOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Expand summary">
               <IconButton size="small" onClick={() => setExpandedRow(expandedRow === f.id ? null : f.id)}>
                 {expandedRow === f.id ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
               </IconButton>
@@ -506,6 +709,12 @@ function FindingsTab() {
           }}
         />
       </Paper>
+
+      {/* Finding context dialog */}
+      <FindingContextDialog
+        findingId={contextFindingId}
+        onClose={() => setContextFindingId(null)}
+      />
 
       {/* Suppress dialog */}
       <Dialog open={suppressDialogOpen} onClose={() => setSuppressDialogOpen(false)} maxWidth="sm" fullWidth>

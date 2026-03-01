@@ -137,6 +137,36 @@ def get_finding(finding_id: uuid.UUID, current: CurrentUser, session: DBSession)
     return _finding_dict(f, device.name if device else None)
 
 
+@router.get("/findings/{finding_id}/context")
+def get_finding_context(finding_id: uuid.UUID, current: CurrentUser, session: DBSession):
+    """Return the finding plus the relevant live config section from the device."""
+    f = session.get(SecurityFinding, finding_id)
+    if not f:
+        raise HTTPException(status_code=404)
+    device = session.get(Device, f.device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    # Derive section name from config_path  (e.g. "firewall_rules[2].action" → "firewall_rules")
+    config_path = f.config_path or ""
+    section = config_path.replace("[", ".").split(".")[0] if config_path else "full"
+
+    try:
+        from app.services.crypto import decrypt_credentials
+        from app.adapters.registry import get_adapter
+        creds = decrypt_credentials(device.encrypted_credentials) if device.encrypted_credentials else {}
+        adapter = get_adapter(device.adapter)
+        config_data = adapter.fetch_config(device, creds, section=section)
+    except Exception as exc:
+        config_data = {"_error": str(exc)}
+
+    return {
+        "finding": _finding_dict(f, device.name),
+        "section": section,
+        "config": config_data,
+    }
+
+
 @router.put("/findings/{finding_id}/suppress")
 def suppress_finding(
     finding_id: uuid.UUID,
