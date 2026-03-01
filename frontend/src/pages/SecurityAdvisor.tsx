@@ -288,9 +288,13 @@ function FindingContextDialog({
   function renderConfig() {
     if (!config) return null
     if ((config as any)._error) {
+      const isUnavailable = (config as any)._error === 'not_available'
       return (
-        <Alert severity="error" sx={{ mt: 1 }}>
-          Could not fetch config: {(config as any)._error}
+        <Alert severity={isUnavailable ? 'info' : 'error'} sx={{ mt: 1 }}>
+          {isUnavailable
+            ? `The "${section}" section is not accessible via the device CLI on this firmware. The finding was detected from scan data — see the description and recommendation above.`
+            : `Could not fetch live config: ${(config as any)._error}${(config as any)._detail ? ' — ' + (config as any)._detail : ''}`
+          }
         </Alert>
       )
     }
