@@ -6,6 +6,7 @@ import {
   LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Select, MenuItem, FormControl, InputLabel, CircularProgress,
   Paper, Tooltip, IconButton, Collapse, Divider, Stack, Alert,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material'
 import { DataGrid } from '@mui/x-data-grid'
 import type { GridColDef } from '@mui/x-data-grid'
@@ -279,6 +280,38 @@ function FindingContextDialog({
   const section = data?.section
   const config = data?.config
 
+  // Columns for firewall / secure-policy rules (Zyxel field name → display label)
+  const RULE_COLUMNS: { key: string; label: string }[] = [
+    { key: '__name',           label: 'Priority' },
+    { key: '_name',            label: 'Name' },
+    { key: '_description',     label: 'Description' },
+    { key: '_user',            label: 'User' },
+    { key: '_schedule',        label: 'Schedule' },
+    { key: '_from',            label: 'From' },
+    { key: '_to',              label: 'To' },
+    { key: '_source_IP',       label: 'IPv4 Source' },
+    { key: '_source_port',     label: 'Source Port' },
+    { key: '_destination_IP',  label: 'IPv4 Destination' },
+    { key: '_service',         label: 'Service' },
+    { key: '_device',          label: 'Device' },
+    { key: '_log',             label: 'LOG' },
+  ]
+
+  function extractRules(raw: Record<string, unknown>): Record<string, unknown>[] | null {
+    // Real Zyxel adapter wraps rules in a _secure_policy_rule key
+    const wrapped = raw['_secure_policy_rule']
+    if (Array.isArray(wrapped)) return wrapped as Record<string, unknown>[]
+    // Mock adapter or direct array
+    if (Array.isArray(raw)) return raw as Record<string, unknown>[]
+    return null
+  }
+
+  function cellVal(v: unknown): string {
+    if (v === null || v === undefined || v === '') return '—'
+    if (typeof v === 'object') return JSON.stringify(v)
+    return String(v)
+  }
+
   function renderConfig() {
     if (!config) return null
     if ((config as any)._error) {
@@ -289,40 +322,63 @@ function FindingContextDialog({
       )
     }
 
+    // ── Firewall rules: render as a structured table ──────────────────────
+    const rules = extractRules(config as Record<string, unknown>)
+    if (rules !== null) {
+      if (rules.length === 0) {
+        return <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>No rules found.</Typography>
+      }
+      // Only show columns that have at least one non-empty value in the data
+      const visibleCols = RULE_COLUMNS.filter((col) =>
+        rules.some((r) => r[col.key] !== undefined && r[col.key] !== null && r[col.key] !== '')
+      )
+      return (
+        <TableContainer component={Paper} variant="outlined" sx={{ mt: 1, maxHeight: 400 }}>
+          <Table size="small" stickyHeader>
+            <TableHead>
+              <TableRow>
+                {visibleCols.map((col) => (
+                  <TableCell key={col.key} sx={{ fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12 }}>
+                    {col.label}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rules.map((rule, i) => (
+                <TableRow key={i} hover>
+                  {visibleCols.map((col) => (
+                    <TableCell key={col.key} sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                      {cellVal(rule[col.key])}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )
+    }
+
+    // ── Everything else: key-value cards ──────────────────────────────────
     const items: unknown[] = Array.isArray(config) ? config : [config]
     if (items.length === 0) {
       return <Typography variant="body2" color="text.secondary">No entries in this section.</Typography>
     }
-
-    // Render each top-level item (rule, object, etc.) as its own card with key-value rows
     return (
       <Stack spacing={0.75} sx={{ mt: 1 }}>
         {items.map((item, i) => (
-          <Box
-            key={i}
-            sx={{
-              p: 1.5, borderRadius: 1, border: '1px solid',
-              borderColor: 'divider', bgcolor: 'background.paper',
-            }}
-          >
+          <Box key={i} sx={{ p: 1.5, borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
             {typeof item === 'object' && item !== null
               ? Object.entries(item as Record<string, unknown>).map(([k, v]) => (
                 <Box key={k} sx={{ display: 'flex', gap: 1, mb: 0.25, flexWrap: 'wrap' }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 160, flexShrink: 0 }}>
-                    {k}
-                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 160, flexShrink: 0 }}>{k}</Typography>
                   <Typography variant="caption" fontWeight={600} fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>
-                    {v === null || v === undefined
-                      ? <Typography component="span" variant="caption" color="text.disabled">null</Typography>
-                      : typeof v === 'object'
-                        ? JSON.stringify(v)
-                        : String(v)}
+                    {cellVal(v)}
                   </Typography>
                 </Box>
               ))
-              : (
-                <Typography variant="caption" fontFamily="monospace">{String(item)}</Typography>
-              )
+              : <Typography variant="caption" fontFamily="monospace">{String(item)}</Typography>
             }
           </Box>
         ))}
