@@ -947,6 +947,316 @@ def check_auto_update_disabled(config: dict) -> Optional[FindingDict]:
 
 
 # ---------------------------------------------------------------------------
+# New checks — Network flood / DoS protection
+# ---------------------------------------------------------------------------
+
+def check_no_icmp_flood_protection(config: dict) -> Optional[FindingDict]:
+    """ICMP flood (ping flood) protection is disabled."""
+    fw_settings = config.get("firewall_settings", {})
+    if fw_settings.get("icmp_flood_protection") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="ICMP flood protection disabled",
+            description=(
+                "ICMP flood protection is not enabled. A sustained ICMP flood (ping "
+                "flood) from the internet can saturate CPU and bandwidth, causing "
+                "denial of service for legitimate traffic."
+            ),
+            recommendation=(
+                "Enable ICMP flood protection on WAN-facing interfaces. "
+                "Set a sensible ICMP rate-limit threshold and consider blocking "
+                "unsolicited ICMP echo requests from untrusted zones entirely."
+            ),
+            config_path="firewall_settings.icmp_flood_protection",
+            compliance_refs='["CIS-FW-1.6", "NIST-SC-5"]',
+        )
+    return None
+
+
+def check_no_port_scan_detection(config: dict) -> Optional[FindingDict]:
+    """Port scan detection is disabled."""
+    fw_settings = config.get("firewall_settings", {})
+    if fw_settings.get("port_scan_detection") is False:
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="Port scan detection disabled",
+            description=(
+                "Port scan detection is not active. Reconnaissance scans from the "
+                "internet can enumerate open ports and services without triggering "
+                "any alert, giving attackers valuable information about the network."
+            ),
+            recommendation=(
+                "Enable port scan detection on WAN-facing interfaces. "
+                "Configure automatic blocking of scanning source addresses and "
+                "alert on detected scan activity."
+            ),
+            config_path="firewall_settings.port_scan_detection",
+            compliance_refs='["CIS-FW-1.7", "NIST-SI-4"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — IPS mode
+# ---------------------------------------------------------------------------
+
+def check_ips_detection_only(config: dict) -> Optional[FindingDict]:
+    """IPS is enabled but in detection-only (monitor) mode — threats are not blocked."""
+    ips = config.get("ips", {})
+    if ips.get("enabled") and ips.get("mode", "").lower() == "detection":
+        return _finding(
+            category="missing_hardening",
+            severity="medium",
+            title="IPS running in detection-only mode (not blocking)",
+            description=(
+                "The Intrusion Prevention System is enabled but configured in "
+                "detection mode only. Known attack signatures are logged but "
+                "not actively blocked, giving attackers a free pass."
+            ),
+            recommendation=(
+                "Switch IPS from detection mode to prevention (inline blocking) mode. "
+                "Review the default prevention profile for false-positive risk before "
+                "enforcing block mode in a production environment."
+            ),
+            config_path="ips.mode",
+            compliance_refs='["CIS-FW-7.1", "NIST-SI-3"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — SNMP
+# ---------------------------------------------------------------------------
+
+def check_snmp_no_trap_host(config: dict) -> Optional[FindingDict]:
+    """SNMP is enabled but no trap host is configured."""
+    snmp = config.get("snmp", {})
+    if snmp.get("enabled") and not snmp.get("trap_host"):
+        return _finding(
+            category="missing_hardening",
+            severity="low",
+            title="SNMP enabled without a trap destination",
+            description=(
+                "SNMP is active but no trap host is configured. SNMP traps are the "
+                "primary mechanism for the device to proactively alert a NMS/SIEM "
+                "about threshold violations, link state changes, and auth failures."
+            ),
+            recommendation=(
+                "Configure an SNMP trap host pointing to your NMS or SIEM. "
+                "Ensure trap community strings differ from read community strings, "
+                "or migrate to SNMPv3 inform notifications with authentication."
+            ),
+            config_path="snmp.trap_host",
+            compliance_refs='["CIS-FW-4.2", "NIST-AU-9"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Authentication / access control
+# ---------------------------------------------------------------------------
+
+def check_local_auth_only(config: dict) -> Optional[FindingDict]:
+    """Only local accounts are used — no centralised authentication server."""
+    remote_auth = config.get("users", {}).get("remote_auth", {})
+    if not remote_auth.get("enabled", False):
+        return _finding(
+            category="authentication",
+            severity="info",
+            title="No centralised authentication server configured",
+            description=(
+                "Remote authentication (RADIUS/LDAP/Active Directory) is disabled. "
+                "All admin accounts are managed locally on the device. Local-only "
+                "accounts are not subject to central password policies, MFA, or "
+                "immediate de-provisioning when staff leave."
+            ),
+            recommendation=(
+                "Integrate the firewall with a centralised identity provider (RADIUS, "
+                "LDAP, or SAML). This enables MFA enforcement, centralised audit "
+                "trails, and instant account revocation."
+            ),
+            config_path="users.remote_auth.enabled",
+            compliance_refs='["CIS-FW-5.6", "NIST-IA-2", "ISO27001-A.9.2"]',
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Dangerous service objects (additional ports)
+# ---------------------------------------------------------------------------
+
+def check_tftp_service(config: dict) -> Optional[FindingDict]:
+    """TFTP service object (UDP/69) present — unauthenticated file transfer."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 69:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="TFTP service object defined (port 69)",
+                description=(
+                    "A service object for TFTP (UDP/69) is defined. TFTP has no "
+                    "authentication mechanism — any host that can reach the port "
+                    "can read or overwrite files, including firmware images."
+                ),
+                recommendation=(
+                    "Remove the TFTP service object. Use SFTP or SCP for secure "
+                    "file transfers. Ensure no firewall rule permits TFTP from "
+                    "untrusted zones."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.5", "NIST-SC-8"]',
+            )
+    return None
+
+
+def check_vnc_service(config: dict) -> Optional[FindingDict]:
+    """VNC service object (port 5900) present."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 5900:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="VNC service object defined (port 5900)",
+                description=(
+                    "A service object for VNC (TCP/5900) is defined. VNC implementations "
+                    "often use weak authentication and transmit the desktop session with "
+                    "inadequate encryption. Internet-facing VNC is a frequent ransomware "
+                    "initial access vector."
+                ),
+                recommendation=(
+                    "Remove direct VNC exposure. Replace with a VPN + RDP/SSH "
+                    "combination, or an enterprise remote-access platform with MFA. "
+                    "If VNC must be used, tunnel it through SSH."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.6", "NIST-SC-7"]',
+            )
+    return None
+
+
+def check_mysql_service(config: dict) -> Optional[FindingDict]:
+    """MySQL/MariaDB service object (port 3306) present."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 3306:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="MySQL/MariaDB service object defined (port 3306)",
+                description=(
+                    "A service object for MySQL/MariaDB (TCP/3306) is defined. "
+                    "Databases should never be directly internet-accessible. "
+                    "Exposed database ports are a primary target for automated "
+                    "credential brute-force and data-exfiltration attacks."
+                ),
+                recommendation=(
+                    "Remove this service object and ensure no firewall rule permits "
+                    "TCP/3306 from untrusted zones. Database traffic should only flow "
+                    "on private internal segments between application and database tiers."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.7", "NIST-SC-7", "ISO27001-A.13.1"]',
+            )
+    return None
+
+
+def check_mssql_service(config: dict) -> Optional[FindingDict]:
+    """MSSQL service object (port 1433) present."""
+    for i, svc in enumerate(config.get("service_objects", [])):
+        if int(svc.get("port", 0)) == 1433:
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="MSSQL service object defined (port 1433)",
+                description=(
+                    "A service object for Microsoft SQL Server (TCP/1433) is defined. "
+                    "Publicly reachable MSSQL is routinely targeted for sa-account "
+                    "brute force, xp_cmdshell exploitation, and data exfiltration."
+                ),
+                recommendation=(
+                    "Block TCP/1433 at the perimeter unconditionally. Remove this "
+                    "service object or ensure no WAN-sourced rule references it. "
+                    "Use encrypted private tunnels for any remote DBA access."
+                ),
+                config_path=f"service_objects[{i}]",
+                compliance_refs='["CIS-FW-2.8", "NIST-SC-7", "ISO27001-A.13.1"]',
+            )
+    return None
+
+
+def check_ssh_from_wan(config: dict) -> Optional[FindingDict]:
+    """SSH (port 22) service object reachable from WAN via an allow rule."""
+    ssh_svc_names = {
+        s.get("name")
+        for s in config.get("service_objects", [])
+        if int(s.get("port", 0)) == 22
+    }
+    if not ssh_svc_names:
+        return None
+    for i, rule in enumerate(config.get("firewall_rules", [])):
+        if (
+            rule.get("src_zone", "").upper() == "WAN"
+            and rule.get("action", "").lower() == "allow"
+            and rule.get("enabled", True)
+        ):
+            return _finding(
+                category="exposed_service",
+                severity="high",
+                title="SSH (port 22) potentially reachable from WAN",
+                description=(
+                    "An SSH service object (TCP/22) exists and a permissive WAN allow "
+                    "rule is active. Publicly reachable SSH is a prime target for "
+                    "credential brute-force, especially with default usernames."
+                ),
+                recommendation=(
+                    "Restrict SSH management access to specific trusted source IPs only. "
+                    "Disable password authentication and require SSH key pairs. "
+                    "Consider moving SSH to a non-standard port or using a VPN jump host."
+                ),
+                config_path=f"firewall_rules[{i}]",
+                compliance_refs='["CIS-FW-2.9", "NIST-IA-5", "ISO27001-A.9.4"]',
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# New checks — Outbound / egress policy
+# ---------------------------------------------------------------------------
+
+def check_unrestricted_outbound(config: dict) -> Optional[FindingDict]:
+    """LAN-to-WAN allow rule with no service restriction (all ports permitted)."""
+    for i, rule in enumerate(config.get("firewall_rules", [])):
+        if (
+            rule.get("src_zone", "").upper() == "LAN"
+            and rule.get("dst_zone", "").upper() == "WAN"
+            and rule.get("action", "").lower() == "allow"
+            and rule.get("enabled", True)
+            and not rule.get("service")   # no service field = all services
+        ):
+            return _finding(
+                category="permissive_rule",
+                severity="low",
+                title="Unrestricted outbound traffic (LAN→WAN, all services)",
+                description=(
+                    f"Rule '{rule.get('name', 'unknown')}' allows all traffic from "
+                    "LAN to WAN without service restriction. This permits any protocol "
+                    "and port egress, making it easier for malware to establish "
+                    "outbound C2 channels and for data to be exfiltrated."
+                ),
+                recommendation=(
+                    "Replace with explicit allow rules for required services only "
+                    "(e.g. TCP/80, TCP/443, TCP/25). Block all other outbound traffic "
+                    "by default. Use application patrol to enforce egress policy "
+                    "even on permitted ports."
+                ),
+                config_path=f"firewall_rules[{i}]",
+                compliance_refs='["CIS-FW-1.8", "NIST-SC-7", "ISO27001-A.13.1"]',
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -956,18 +1266,25 @@ ALL_CHECKS = [
     check_no_deny_by_default,
     check_any_to_any_allow,
     check_disabled_rules_present,
+    check_unrestricted_outbound,
     # Exposed services
     check_telnet_service,
     check_http_wan_reachable,
+    check_ssh_from_wan,
     check_ftp_service,
+    check_tftp_service,
     check_rdp_service,
+    check_vnc_service,
     check_smb_service,
+    check_mysql_service,
+    check_mssql_service,
     # Authentication
     check_default_admin_username,
     check_multiple_admin_accounts,
     check_no_login_timeout,
     check_no_account_lockout,
     check_no_password_policy,
+    check_local_auth_only,
     check_snmp_default_community,
     # Weak protocols
     check_no_vpn,
@@ -984,12 +1301,16 @@ ALL_CHECKS = [
     check_default_hostname,
     check_public_dns_servers,
     check_no_ips,
+    check_ips_detection_only,
     check_no_content_filter,
     check_no_app_patrol,
     check_no_remote_syslog,
     check_log_level_too_high,
     check_no_anti_spoofing,
     check_no_syn_flood_protection,
+    check_no_icmp_flood_protection,
+    check_no_port_scan_detection,
+    check_snmp_no_trap_host,
     # Firmware
     check_old_firmware_v5,
     check_auto_update_disabled,
