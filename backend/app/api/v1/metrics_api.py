@@ -15,6 +15,13 @@ from app.models.compliance import ComplianceResult
 router = APIRouter()
 
 
+@router.post("/metrics/collect", status_code=202)
+def trigger_metrics_collect(current: CurrentUser):
+    from app.tasks.metrics import collect_all_metrics
+    task = collect_all_metrics.delay()
+    return {"task_id": task.id}
+
+
 @router.get("/{device_id}/metrics")
 def get_device_metrics(
     device_id: uuid.UUID,

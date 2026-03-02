@@ -6,9 +6,11 @@ import {
   Button, FormControlLabel, Checkbox,
 } from '@mui/material'
 import TuneIcon from '@mui/icons-material/Tune'
-import { useQuery } from '@tanstack/react-query'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDevices } from '../api/devices'
-import { getDeviceMetrics, getDeviceHealth, getDeviceInterfaces } from '../api/metrics'
+import { getDeviceMetrics, getDeviceHealth, getDeviceInterfaces, triggerMetricsCollect } from '../api/metrics'
+import { useToastStore } from '../store/toast'
 import type { Device } from '../types'
 import { useMetricsConfigStore, METRIC_SECTION_LABELS } from '../store/metricsConfig'
 import type { MetricSectionId } from '../store/metricsConfig'
@@ -158,9 +160,20 @@ export default function Metrics() {
   const [hours, setHours] = useState(24)
   const [configOpen, setConfigOpen] = useState(false)
   const { visible } = useMetricsConfigStore()
+  const { push } = useToastStore()
+  const qc = useQueryClient()
   const { data: devices = [], isLoading } = useQuery({
     queryKey: ['devices'],
     queryFn: listDevices,
+  })
+
+  const collectMut = useMutation({
+    mutationFn: triggerMetricsCollect,
+    onSuccess: () => {
+      push('Metrics collection started — refreshing in 5s')
+      setTimeout(() => qc.invalidateQueries({ queryKey: ['device-metrics'] }), 5000)
+    },
+    onError: () => push('Failed to trigger metrics collection', 'error'),
   })
 
   if (isLoading) return <CircularProgress />
@@ -180,6 +193,13 @@ export default function Metrics() {
               <MenuItem value={168}>Last 7 days</MenuItem>
             </Select>
           </FormControl>
+          <Tooltip title="Collect metrics now">
+            <IconButton onClick={() => collectMut.mutate()} disabled={collectMut.isPending}>
+              {collectMut.isPending
+                ? <CircularProgress size={20} />
+                : <RefreshIcon />}
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Configure metrics">
             <IconButton onClick={() => setConfigOpen(true)}><TuneIcon /></IconButton>
           </Tooltip>

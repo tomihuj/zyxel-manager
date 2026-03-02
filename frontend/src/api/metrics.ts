@@ -11,3 +11,7 @@ export function getDeviceHealth(deviceId: string) {
 export function getDeviceInterfaces(deviceId: string) {
   return api.get(`/devices/${deviceId}/interfaces`).then((r) => r.data)
 }
+
+export function triggerMetricsCollect() {
+  return api.post('/devices/metrics/collect').then((r) => r.data)
+}
