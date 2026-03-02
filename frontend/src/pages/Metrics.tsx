@@ -90,28 +90,36 @@ function MetricsChart({
         <Box sx={{ mb: 2 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
             <Typography variant="body2">CPU Usage</Typography>
-            <Typography variant="body2" fontWeight={600}>{latest.cpu_pct?.toFixed(1)}%</Typography>
+            <Typography variant="body2" fontWeight={600} color={latest.cpu_pct == null ? 'text.secondary' : undefined}>
+              {latest.cpu_pct != null ? `${latest.cpu_pct.toFixed(1)}%` : 'N/A'}
+            </Typography>
           </Box>
-          <LinearProgress
-            variant="determinate"
-            value={latest.cpu_pct ?? 0}
-            color={latest.cpu_pct > 80 ? 'error' : latest.cpu_pct > 60 ? 'warning' : 'success'}
-            sx={{ height: 8, borderRadius: 1 }}
-          />
+          {latest.cpu_pct != null && (
+            <LinearProgress
+              variant="determinate"
+              value={latest.cpu_pct}
+              color={latest.cpu_pct > 80 ? 'error' : latest.cpu_pct > 60 ? 'warning' : 'success'}
+              sx={{ height: 8, borderRadius: 1 }}
+            />
+          )}
         </Box>
       )}
       {visible.memory && (
         <Box sx={{ mb: 2 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
             <Typography variant="body2">Memory Usage</Typography>
-            <Typography variant="body2" fontWeight={600}>{latest.memory_pct?.toFixed(1)}%</Typography>
+            <Typography variant="body2" fontWeight={600} color={latest.memory_pct == null ? 'text.secondary' : undefined}>
+              {latest.memory_pct != null ? `${latest.memory_pct.toFixed(1)}%` : 'N/A'}
+            </Typography>
           </Box>
-          <LinearProgress
-            variant="determinate"
-            value={latest.memory_pct ?? 0}
-            color={latest.memory_pct > 80 ? 'error' : latest.memory_pct > 60 ? 'warning' : 'success'}
-            sx={{ height: 8, borderRadius: 1 }}
-          />
+          {latest.memory_pct != null && (
+            <LinearProgress
+              variant="determinate"
+              value={latest.memory_pct}
+              color={latest.memory_pct > 80 ? 'error' : latest.memory_pct > 60 ? 'warning' : 'success'}
+              sx={{ height: 8, borderRadius: 1 }}
+            />
+          )}
         </Box>
       )}
       {visible.uptime && (

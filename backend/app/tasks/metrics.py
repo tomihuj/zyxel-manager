@@ -44,8 +44,8 @@ def _collect_device_metrics(session: Session, device: Device):
     else:
         info = adapter.get_device_info(device, creds)
         uptime_seconds = info.get("uptime_seconds") or 0
-        cpu_pct = float(info.get("cpu_pct") or 0.0)
-        memory_pct = float(info.get("memory_pct") or 0.0)
+        cpu_pct = info.get("cpu_pct")     # None when not available on this firmware
+        memory_pct = info.get("memory_pct")  # None when not available on this firmware
 
     metric = DeviceMetric(
         device_id=device.id,
@@ -56,5 +56,7 @@ def _collect_device_metrics(session: Session, device: Device):
     )
     session.add(metric)
     session.commit()
-    logger.debug("Collected metrics for device %s: cpu=%.1f%% mem=%.1f%%",
-                 device.id, cpu_pct, memory_pct)
+    logger.debug("Collected metrics for device %s: cpu=%s mem=%s",
+                 device.id,
+                 f"{cpu_pct:.1f}%" if cpu_pct is not None else "N/A",
+                 f"{memory_pct:.1f}%" if memory_pct is not None else "N/A")

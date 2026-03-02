@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _SECTION_CLI: dict[str, list[str]] = {
     "system":          ["show version"],
     "system_status":   ["show system status", "show system resource", "show system-info"],
+    "system_uptime":   ["show system uptime"],
     "interfaces":      ["show interface all"],
     "routing":         ["show ip route static"],
     "nat":             [
@@ -104,7 +105,7 @@ def _extract_system_stats(data) -> dict:
         return None
 
     def _uptime_seconds(keys):
-        """Parse uptime string like '3d 2h 15m' or raw seconds."""
+        """Parse uptime string — handles raw seconds, HH:MM:SS, and '3d 2h 15m' formats."""
         for k in keys:
             v = merged.get(k)
             if v is None:
@@ -113,8 +114,12 @@ def _extract_system_stats(data) -> dict:
                 return int(v)
             except (ValueError, TypeError):
                 pass
+            s = str(v).strip()
+            # Parse HH:MM:SS (e.g. '09:24:04' from 'show system uptime')
+            hms = re.match(r'^(\d+):(\d{2}):(\d{2})$', s)
+            if hms:
+                return int(hms.group(1)) * 3600 + int(hms.group(2)) * 60 + int(hms.group(3))
             # Parse human-readable e.g. "3 day(s) 2 hour(s) 15 min(s)"
-            s = str(v)
             total = 0
             for num, unit in re.findall(r"(\d+)\s*(day|hour|min|sec)", s, re.IGNORECASE):
                 n = int(num)
@@ -133,7 +138,7 @@ def _extract_system_stats(data) -> dict:
 
     cpu = _pct(["CPU Usage (%)", "CPU Usage", "CPU (%)", "cpu_usage", "_cpu_usage", "cpu", "CPU"])
     mem = _pct(["Memory Usage (%)", "Memory Usage", "Memory (%)", "memory_usage", "_memory_usage", "memory", "Memory"])
-    uptime = _uptime_seconds(["Uptime", "uptime", "_uptime", "System Uptime", "uptime_seconds"])
+    uptime = _uptime_seconds(["Uptime", "uptime", "_uptime", "_system_uptime", "System Uptime", "uptime_seconds"])
 
     return {
         "cpu_pct": cpu,
@@ -488,6 +493,16 @@ class ZyxelAdapter(FirewallAdapter):
                     info.update({k: v for k, v in stats.items() if v is not None})
                 except Exception as stats_err:
                     logger.debug("ZyxelAdapter.get_device_info: stats fetch failed: %s", stats_err)
+                # Fallback: fetch uptime via 'show system uptime' if not already available
+                if info.get("uptime_seconds") is None:
+                    try:
+                        uptime_data = self._fetch_section(c, base, _SECTION_CLI["system_uptime"][0])
+                        if uptime_data:
+                            uptime_stats = _extract_system_stats(uptime_data)
+                            if uptime_stats.get("uptime_seconds") is not None:
+                                info["uptime_seconds"] = uptime_stats["uptime_seconds"]
+                    except Exception as uptime_err:
+                        logger.debug("ZyxelAdapter.get_device_info: uptime fetch failed: %s", uptime_err)
                 return info
         except Exception as e:
             logger.error("ZyxelAdapter.get_device_info: %s", e)
