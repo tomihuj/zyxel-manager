@@ -43,9 +43,9 @@ def _collect_device_metrics(session: Session, device: Device):
         uptime_seconds = info.get("uptime_seconds", 0)
     else:
         info = adapter.get_device_info(device, creds)
-        uptime_seconds = info.get("uptime_seconds", 0)
-        cpu_pct = info.get("cpu_pct", 0.0)
-        memory_pct = info.get("memory_pct", 0.0)
+        uptime_seconds = info.get("uptime_seconds") or 0
+        cpu_pct = float(info.get("cpu_pct") or 0.0)
+        memory_pct = float(info.get("memory_pct") or 0.0)
 
     metric = DeviceMetric(
         device_id=device.id,

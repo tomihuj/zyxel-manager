@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Multiple candidates handle firmware differences across FLEX models.
 _SECTION_CLI: dict[str, list[str]] = {
     "system":          ["show version"],
+    "system_status":   ["show system status", "show system resource", "show system-info"],
     "interfaces":      ["show interface all"],
     "routing":         ["show ip route static"],
     "nat":             [
@@ -78,6 +79,67 @@ def _extract_system_info(data) -> dict:
     model = (row.get("_model") or row.get("Model Name")
              or row.get("model") or row.get("Model"))
     return {"firmware_version": fw, "serial_number": serial, "model": model}
+
+
+def _extract_system_stats(data) -> dict:
+    """Extract cpu_pct, memory_pct, uptime_seconds from a 'show system status' response.
+
+    Handles both list-of-dicts and plain dict responses.
+    Field names vary across ZLD firmware versions — try all known variants.
+    """
+    rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+    merged: dict = {}
+    for row in rows:
+        if isinstance(row, dict):
+            merged.update(row)
+
+    def _pct(keys):
+        for k in keys:
+            v = merged.get(k)
+            if v is not None:
+                try:
+                    return float(str(v).replace("%", "").strip())
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+    def _uptime_seconds(keys):
+        """Parse uptime string like '3d 2h 15m' or raw seconds."""
+        for k in keys:
+            v = merged.get(k)
+            if v is None:
+                continue
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                pass
+            # Parse human-readable e.g. "3 day(s) 2 hour(s) 15 min(s)"
+            s = str(v)
+            total = 0
+            for num, unit in re.findall(r"(\d+)\s*(day|hour|min|sec)", s, re.IGNORECASE):
+                n = int(num)
+                unit = unit.lower()
+                if unit == "day":
+                    total += n * 86400
+                elif unit == "hour":
+                    total += n * 3600
+                elif unit == "min":
+                    total += n * 60
+                else:
+                    total += n
+            if total:
+                return total
+        return None
+
+    cpu = _pct(["CPU Usage (%)", "CPU Usage", "CPU (%)", "cpu_usage", "_cpu_usage", "cpu", "CPU"])
+    mem = _pct(["Memory Usage (%)", "Memory Usage", "Memory (%)", "memory_usage", "_memory_usage", "memory", "Memory"])
+    uptime = _uptime_seconds(["Uptime", "uptime", "_uptime", "System Uptime", "uptime_seconds"])
+
+    return {
+        "cpu_pct": cpu,
+        "memory_pct": mem,
+        "uptime_seconds": uptime,
+    }
 
 
 def _parse_zysh_response(text: str, cmd: str = "") -> list | dict | None:
@@ -418,8 +480,15 @@ class ZyxelAdapter(FirewallAdapter):
             with self._client(device) as c:
                 base = self._base_url(device)
                 self._authenticate(c, base, credentials)
-                data = self._fetch_section_multi(c, base, _SECTION_CLI["system"])
-                return _extract_system_info(data)
+                version_data = self._fetch_section_multi(c, base, _SECTION_CLI["system"])
+                info = _extract_system_info(version_data)
+                try:
+                    stats_data = self._fetch_section_multi(c, base, _SECTION_CLI["system_status"])
+                    stats = _extract_system_stats(stats_data)
+                    info.update({k: v for k, v in stats.items() if v is not None})
+                except Exception as stats_err:
+                    logger.debug("ZyxelAdapter.get_device_info: stats fetch failed: %s", stats_err)
+                return info
         except Exception as e:
             logger.error("ZyxelAdapter.get_device_info: %s", e)
             return {}
