@@ -2,11 +2,39 @@ import { useState } from 'react'
 import {
   Box, Typography, Card, CardContent, Grid, CircularProgress,
   Chip, LinearProgress, Alert, MenuItem, Select, FormControl, InputLabel,
+  IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
+  Button, FormControlLabel, Checkbox,
 } from '@mui/material'
+import TuneIcon from '@mui/icons-material/Tune'
 import { useQuery } from '@tanstack/react-query'
 import { listDevices } from '../api/devices'
 import { getDeviceMetrics, getDeviceHealth, getDeviceInterfaces } from '../api/metrics'
 import type { Device } from '../types'
+import { useMetricsConfigStore, METRIC_SECTION_LABELS } from '../store/metricsConfig'
+import type { MetricSectionId } from '../store/metricsConfig'
+
+function ConfigureDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { visible, toggle, reset } = useMetricsConfigStore()
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Configure Visible Metrics</DialogTitle>
+      <DialogContent>
+        {(Object.entries(METRIC_SECTION_LABELS) as [MetricSectionId, string][]).map(([id, label]) => (
+          <FormControlLabel
+            key={id}
+            control={<Checkbox checked={visible[id]} onChange={() => toggle(id)} />}
+            label={label}
+            sx={{ display: 'block' }}
+          />
+        ))}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={reset} color="inherit" size="small">Reset to default</Button>
+        <Button onClick={onClose} variant="contained" size="small">Done</Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
 
 function HealthCard({ deviceId }: { deviceId: string }) {
   const { data: health, isLoading } = useQuery({
@@ -35,7 +63,12 @@ function HealthCard({ deviceId }: { deviceId: string }) {
   )
 }
 
-function MetricsChart({ deviceId, hours }: { deviceId: string; hours: number }) {
+function MetricsChart({
+  deviceId, hours, visible,
+}: {
+  deviceId: string; hours: number
+  visible: Pick<Record<MetricSectionId, boolean>, 'cpu' | 'memory' | 'uptime'>
+}) {
   const { data: metrics = [], isLoading } = useQuery({
     queryKey: ['device-metrics', deviceId, hours],
     queryFn: () => getDeviceMetrics(deviceId, hours),
@@ -51,33 +84,39 @@ function MetricsChart({ deviceId, hours }: { deviceId: string; hours: number }) 
 
   return (
     <Box>
-      <Box sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-          <Typography variant="body2">CPU Usage</Typography>
-          <Typography variant="body2" fontWeight={600}>{latest.cpu_pct?.toFixed(1)}%</Typography>
+      {visible.cpu && (
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+            <Typography variant="body2">CPU Usage</Typography>
+            <Typography variant="body2" fontWeight={600}>{latest.cpu_pct?.toFixed(1)}%</Typography>
+          </Box>
+          <LinearProgress
+            variant="determinate"
+            value={latest.cpu_pct ?? 0}
+            color={latest.cpu_pct > 80 ? 'error' : latest.cpu_pct > 60 ? 'warning' : 'success'}
+            sx={{ height: 8, borderRadius: 1 }}
+          />
         </Box>
-        <LinearProgress
-          variant="determinate"
-          value={latest.cpu_pct ?? 0}
-          color={latest.cpu_pct > 80 ? 'error' : latest.cpu_pct > 60 ? 'warning' : 'success'}
-          sx={{ height: 8, borderRadius: 1 }}
-        />
-      </Box>
-      <Box sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-          <Typography variant="body2">Memory Usage</Typography>
-          <Typography variant="body2" fontWeight={600}>{latest.memory_pct?.toFixed(1)}%</Typography>
+      )}
+      {visible.memory && (
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+            <Typography variant="body2">Memory Usage</Typography>
+            <Typography variant="body2" fontWeight={600}>{latest.memory_pct?.toFixed(1)}%</Typography>
+          </Box>
+          <LinearProgress
+            variant="determinate"
+            value={latest.memory_pct ?? 0}
+            color={latest.memory_pct > 80 ? 'error' : latest.memory_pct > 60 ? 'warning' : 'success'}
+            sx={{ height: 8, borderRadius: 1 }}
+          />
         </Box>
-        <LinearProgress
-          variant="determinate"
-          value={latest.memory_pct ?? 0}
-          color={latest.memory_pct > 80 ? 'error' : latest.memory_pct > 60 ? 'warning' : 'success'}
-          sx={{ height: 8, borderRadius: 1 }}
-        />
-      </Box>
-      <Typography variant="caption" color="text.secondary">
-        Uptime: {formatUptime(latest.uptime_seconds)} · {metrics.length} data points
-      </Typography>
+      )}
+      {visible.uptime && (
+        <Typography variant="caption" color="text.secondary">
+          Uptime: {formatUptime(latest.uptime_seconds)} · {metrics.length} data points
+        </Typography>
+      )}
     </Box>
   )
 }
@@ -117,6 +156,8 @@ function formatUptime(seconds?: number): string {
 
 export default function Metrics() {
   const [hours, setHours] = useState(24)
+  const [configOpen, setConfigOpen] = useState(false)
+  const { visible } = useMetricsConfigStore()
   const { data: devices = [], isLoading } = useQuery({
     queryKey: ['devices'],
     queryFn: listDevices,
@@ -128,17 +169,24 @@ export default function Metrics() {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant="h5" fontWeight={700}>Device Metrics</Typography>
-        <FormControl size="small" sx={{ minWidth: 140 }}>
-          <InputLabel>Time Range</InputLabel>
-          <Select label="Time Range" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
-            <MenuItem value={1}>Last 1 hour</MenuItem>
-            <MenuItem value={6}>Last 6 hours</MenuItem>
-            <MenuItem value={24}>Last 24 hours</MenuItem>
-            <MenuItem value={72}>Last 3 days</MenuItem>
-            <MenuItem value={168}>Last 7 days</MenuItem>
-          </Select>
-        </FormControl>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>Time Range</InputLabel>
+            <Select label="Time Range" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
+              <MenuItem value={1}>Last 1 hour</MenuItem>
+              <MenuItem value={6}>Last 6 hours</MenuItem>
+              <MenuItem value={24}>Last 24 hours</MenuItem>
+              <MenuItem value={72}>Last 3 days</MenuItem>
+              <MenuItem value={168}>Last 7 days</MenuItem>
+            </Select>
+          </FormControl>
+          <Tooltip title="Configure metrics">
+            <IconButton onClick={() => setConfigOpen(true)}><TuneIcon /></IconButton>
+          </Tooltip>
+        </Box>
       </Box>
+
+      <ConfigureDialog open={configOpen} onClose={() => setConfigOpen(false)} />
 
       {devices.length === 0 && (
         <Alert severity="info">No devices found. Add devices first.</Alert>
@@ -160,11 +208,11 @@ export default function Metrics() {
                       color={device.status === 'online' ? 'success' : device.status === 'offline' ? 'error' : 'default'}
                       size="small"
                     />
-                    <HealthCard deviceId={device.id} />
+                    {visible.health && <HealthCard deviceId={device.id} />}
                   </Box>
                 </Box>
-                <MetricsChart deviceId={device.id} hours={hours} />
-                <InterfaceList deviceId={device.id} />
+                <MetricsChart deviceId={device.id} hours={hours} visible={visible} />
+                {visible.interfaces && <InterfaceList deviceId={device.id} />}
               </CardContent>
             </Card>
           </Grid>
