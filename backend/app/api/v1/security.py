@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from app.core.deps import CurrentUser, DBSession
-from app.models.security import SecurityFinding, SecurityScan, DeviceRiskScore
+from app.models.security import SecurityFinding, SecurityScan, DeviceRiskScore, SecurityFindingExclusion
 from app.models.device import Device
 from app.models.user import User
 from app.services.audit import write_audit
@@ -22,6 +22,12 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 class SuppressBody(BaseModel):
+    reason: str
+
+
+class ExcludeBody(BaseModel):
+    device_id: str
+    finding_title: str
     reason: str
 
 
@@ -94,6 +100,19 @@ def _score_dict(s: DeviceRiskScore, device_name: Optional[str] = None) -> dict:
         "low_findings": s.low_findings,
         "open_findings": s.open_findings,
         "calculated_at": s.calculated_at,
+    }
+
+
+def _exclusion_dict(e: SecurityFindingExclusion, device_name: Optional[str] = None, created_by_username: Optional[str] = None) -> dict:
+    return {
+        "id": str(e.id),
+        "device_id": str(e.device_id),
+        "device_name": device_name,
+        "finding_title": e.finding_title,
+        "reason": e.reason,
+        "created_by": str(e.created_by) if e.created_by else None,
+        "created_by_username": created_by_username,
+        "created_at": e.created_at,
     }
 
 
@@ -392,3 +411,107 @@ def get_summary(current: CurrentUser, session: DBSession):
         "by_severity": by_severity,
         "by_category": by_category,
     }
+
+
+# ---------------------------------------------------------------------------
+# Exclusions endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/exclusions")
+def list_exclusions(
+    current: CurrentUser,
+    session: DBSession,
+    device_id: Optional[str] = None,
+):
+    q = select(SecurityFindingExclusion)
+    if device_id:
+        q = q.where(SecurityFindingExclusion.device_id == uuid.UUID(device_id))
+    q = q.order_by(SecurityFindingExclusion.created_at.desc())
+    exclusions = session.exec(q).all()
+    devices = {str(d.id): d.name for d in session.exec(select(Device)).all()}
+    users = {str(u.id): u.username for u in session.exec(select(User)).all()}
+    return [
+        _exclusion_dict(
+            e,
+            device_name=devices.get(str(e.device_id)),
+            created_by_username=users.get(str(e.created_by)) if e.created_by else None,
+        )
+        for e in exclusions
+    ]
+
+
+@router.post("/exclusions", status_code=201)
+def create_exclusion(body: ExcludeBody, current: CurrentUser, session: DBSession):
+    device_id = uuid.UUID(body.device_id)
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    # Check duplicate
+    existing_excl = session.exec(
+        select(SecurityFindingExclusion)
+        .where(
+            SecurityFindingExclusion.device_id == device_id,
+            SecurityFindingExclusion.finding_title == body.finding_title,
+        )
+    ).first()
+    if existing_excl:
+        raise HTTPException(status_code=409, detail="Exclusion already exists for this device and finding")
+
+    excl = SecurityFindingExclusion(
+        device_id=device_id,
+        finding_title=body.finding_title,
+        reason=body.reason,
+        created_by=current.id,
+    )
+    session.add(excl)
+
+    # Mark any existing open/suppressed finding with this title as excluded
+    existing_finding = session.exec(
+        select(SecurityFinding)
+        .where(
+            SecurityFinding.device_id == device_id,
+            SecurityFinding.title == body.finding_title,
+            SecurityFinding.status.in_(["open", "suppressed"]),
+        )
+    ).first()
+    if existing_finding:
+        existing_finding.status = "excluded"
+        session.add(existing_finding)
+
+    session.commit()
+    session.refresh(excl)
+
+    write_audit(session, "create_finding_exclusion", current, "security_finding_exclusion",
+                str(excl.id), {"device_id": body.device_id, "finding_title": body.finding_title, "reason": body.reason})
+
+    users = {str(u.id): u.username for u in session.exec(select(User)).all()}
+    return _exclusion_dict(excl, device_name=device.name,
+                           created_by_username=users.get(str(current.id)))
+
+
+@router.delete("/exclusions/{exclusion_id}", status_code=200)
+def delete_exclusion(exclusion_id: uuid.UUID, current: CurrentUser, session: DBSession):
+    excl = session.get(SecurityFindingExclusion, exclusion_id)
+    if not excl:
+        raise HTTPException(status_code=404)
+
+    # Re-open the excluded finding if it exists
+    excluded_finding = session.exec(
+        select(SecurityFinding)
+        .where(
+            SecurityFinding.device_id == excl.device_id,
+            SecurityFinding.title == excl.finding_title,
+            SecurityFinding.status == "excluded",
+        )
+    ).first()
+    if excluded_finding:
+        excluded_finding.status = "open"
+        session.add(excluded_finding)
+
+    write_audit(session, "delete_finding_exclusion", current, "security_finding_exclusion",
+                str(exclusion_id), {"finding_title": excl.finding_title})
+
+    session.delete(excl)
+    session.commit()
+    return {"deleted": True}

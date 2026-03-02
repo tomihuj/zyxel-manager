@@ -94,6 +94,36 @@ class SecurityFinding(SQLModel, table=True):
     )
 
 
+class SecurityFindingExclusion(SQLModel, table=True):
+    __tablename__ = "security_finding_exclusions"
+    __table_args__ = (
+        sa.UniqueConstraint("device_id", "finding_title", name="uq_exclusion_device_title"),
+    )
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    device_id: uuid.UUID = Field(
+        sa_column=Column(
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("devices.id", ondelete="CASCADE"),
+            index=True,
+            nullable=False,
+        )
+    )
+    finding_title: str = Field(max_length=256)
+    reason: str = Field(max_length=1024)
+    created_by: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True)),
+    )
+
+
 class DeviceRiskScore(SQLModel, table=True):
     __tablename__ = "device_risk_scores"
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

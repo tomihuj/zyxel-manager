@@ -195,7 +195,7 @@ export interface SecurityFinding {
   recommendation: string
   remediation_patch: object | null
   config_path: string | null
-  status: 'open' | 'suppressed' | 'resolved'
+  status: 'open' | 'suppressed' | 'excluded' | 'resolved'
   suppressed_reason: string | null
   compliance_refs: string[]
   first_seen: string
@@ -236,6 +236,17 @@ export interface DeviceRiskScore {
   low_findings: number
   open_findings: number
   calculated_at: string
+}
+
+export interface SecurityExclusion {
+  id: string
+  device_id: string
+  device_name: string | null
+  finding_title: string
+  reason: string
+  created_by: string | null
+  created_by_username: string | null
+  created_at: string
 }
 
 export interface SecuritySummary {

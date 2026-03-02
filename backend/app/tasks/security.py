@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 from app.tasks.celery_app import celery_app
 from app.db.session import get_engine
 from app.models.device import Device
-from app.models.security import SecurityFinding, SecurityScan, DeviceRiskScore
+from app.models.security import SecurityFinding, SecurityScan, DeviceRiskScore, SecurityFindingExclusion
 from app.adapters.registry import get_adapter
 from app.services.crypto import decrypt_credentials
 from app.services.security_analyzer import analyze_config, calculate_score
@@ -116,14 +116,23 @@ def _scan_device(
 
     now = datetime.now(timezone.utc)
 
-    # Load existing open/suppressed findings for this device (keyed by title)
+    # Load exclusions for this device (by title)
+    excluded_titles: set[str] = {
+        e.finding_title
+        for e in session.exec(
+            select(SecurityFindingExclusion)
+            .where(SecurityFindingExclusion.device_id == device.id)
+        ).all()
+    }
+
+    # Load existing open/suppressed/excluded findings for this device (keyed by title)
     existing_map: dict[str, SecurityFinding] = {
         f.title: f
         for f in session.exec(
             select(SecurityFinding)
             .where(
                 SecurityFinding.device_id == device.id,
-                SecurityFinding.status.in_(["open", "suppressed"]),
+                SecurityFinding.status.in_(["open", "suppressed", "excluded"]),
             )
         ).all()
     }
@@ -134,7 +143,31 @@ def _scan_device(
         title = fd["title"]
         seen_titles.add(title)
 
-        if title in existing_map:
+        if title in excluded_titles:
+            # Excluded: just update last_seen timestamp, do not treat as open
+            if title in existing_map:
+                existing = existing_map[title]
+                existing.last_seen = now
+                existing.scan_id = scan.id
+                session.add(existing)
+            else:
+                new_f = SecurityFinding(
+                    device_id=device.id,
+                    scan_id=scan.id,
+                    category=fd["category"],
+                    severity=fd["severity"],
+                    title=title,
+                    description=fd["description"],
+                    recommendation=fd["recommendation"],
+                    remediation_patch=fd.get("remediation_patch"),
+                    config_path=fd.get("config_path"),
+                    status="excluded",
+                    compliance_refs=fd.get("compliance_refs"),
+                    first_seen=now,
+                    last_seen=now,
+                )
+                session.add(new_f)
+        elif title in existing_map:
             # Update last_seen for existing finding
             existing = existing_map[title]
             existing.last_seen = now

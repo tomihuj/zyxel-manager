@@ -24,14 +24,17 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import SettingsIcon from '@mui/icons-material/Settings'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import BlockIcon from '@mui/icons-material/Block'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import {
   listFindings, suppressFinding, reopenFinding, remediateFinding,
   listScans, triggerScan, cancelScan, listScores, getSecuritySummary, getFindingContext,
+  listExclusions, createExclusion, deleteExclusion,
 } from '../api/security'
 import { listDevices } from '../api/devices'
 import { useToastStore } from '../store/toast'
 import { useParameterSetsStore, extractConfigRows, cellStr } from '../store/parameterSets'
-import type { SecurityFinding, SecurityScan } from '../types'
+import type { SecurityFinding, SecurityScan, SecurityExclusion } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -596,7 +599,7 @@ function FindingContextDialog({
             <Chip
               label={f.status}
               size="small"
-              color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : 'success'}
+              color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : f.status === 'excluded' ? 'default' : 'success'}
               variant="outlined"
               sx={{ textTransform: 'capitalize' }}
             />
@@ -726,6 +729,9 @@ function FindingsTab() {
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [suppressTarget, setSuppressTarget] = useState<SecurityFinding | null>(null)
   const [suppressReason, setSuppressReason] = useState('')
+  const [excludeDialogOpen, setExcludeDialogOpen] = useState(false)
+  const [excludeTarget, setExcludeTarget] = useState<SecurityFinding | null>(null)
+  const [excludeReason, setExcludeReason] = useState('')
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const [contextFindingId, setContextFindingId] = useState<string | null>(null)
 
@@ -773,6 +779,20 @@ function FindingsTab() {
     onError: () => push('Failed to create remediation job', 'error'),
   })
 
+  const excludeMut = useMutation({
+    mutationFn: ({ device_id, finding_title, reason }: { device_id: string; finding_title: string; reason: string }) =>
+      createExclusion(device_id, finding_title, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['security-findings'] })
+      qc.invalidateQueries({ queryKey: ['security-exclusions'] })
+      qc.invalidateQueries({ queryKey: ['security-summary'] })
+      push('Exclusion created — finding will be ignored in future scans')
+      setExcludeDialogOpen(false)
+      setExcludeReason('')
+    },
+    onError: () => push('Failed to create exclusion', 'error'),
+  })
+
   const columns: GridColDef[] = [
     {
       field: 'severity', headerName: 'Severity', width: 110,
@@ -800,8 +820,8 @@ function FindingsTab() {
         <Chip
           label={p.value}
           size="small"
-          color={p.value === 'open' ? 'error' : p.value === 'suppressed' ? 'warning' : 'success'}
-          variant={p.value === 'resolved' ? 'outlined' : 'filled'}
+          color={p.value === 'open' ? 'error' : p.value === 'suppressed' ? 'warning' : p.value === 'excluded' ? 'default' : 'success'}
+          variant={p.value === 'resolved' || p.value === 'excluded' ? 'outlined' : 'filled'}
           sx={{ textTransform: 'capitalize' }}
         />
       ),
@@ -837,6 +857,16 @@ function FindingsTab() {
                   onClick={() => { setSuppressTarget(f); setSuppressDialogOpen(true) }}
                 >
                   <VisibilityOffIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {(f.status === 'open' || f.status === 'suppressed') && (
+              <Tooltip title="Exclude from future scans">
+                <IconButton
+                  size="small"
+                  onClick={() => { setExcludeTarget(f); setExcludeDialogOpen(true) }}
+                >
+                  <BlockIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
@@ -893,7 +923,7 @@ function FindingsTab() {
           <InputLabel>Status</InputLabel>
           <Select label="Status" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
             <MenuItem value="">All</MenuItem>
-            {['open', 'suppressed', 'resolved'].map((s) => (
+            {['open', 'suppressed', 'excluded', 'resolved'].map((s) => (
               <MenuItem key={s} value={s} sx={{ textTransform: 'capitalize' }}>{s}</MenuItem>
             ))}
           </Select>
@@ -920,7 +950,7 @@ function FindingsTab() {
           initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
           disableRowSelectionOnClick
           getRowClassName={(p) =>
-            p.row.status === 'suppressed' || p.row.status === 'resolved'
+            p.row.status === 'suppressed' || p.row.status === 'excluded' || p.row.status === 'resolved'
               ? 'finding-dimmed'
               : expandedRow === p.row.id ? 'finding-expanded' : ''
           }
@@ -941,7 +971,7 @@ function FindingsTab() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                 <Chip label={f.severity} size="small" color={SEVERITY_MUI[f.severity] ?? 'default'} sx={{ textTransform: 'capitalize' }} />
                 <Chip label={CATEGORY_LABELS[f.category] ?? f.category} size="small" variant="outlined" />
-                <Chip label={f.status} size="small" color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : 'success'} variant="outlined" sx={{ textTransform: 'capitalize' }} />
+                <Chip label={f.status} size="small" color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : f.status === 'excluded' ? 'default' : 'success'} variant="outlined" sx={{ textTransform: 'capitalize' }} />
                 <Typography variant="subtitle2" fontWeight={700} sx={{ ml: 0.5 }}>{f.title}</Typography>
                 <IconButton size="small" sx={{ ml: 'auto' }} onClick={() => setExpandedRow(null)}>
                   <ExpandLessIcon fontSize="small" />
@@ -985,6 +1015,11 @@ function FindingsTab() {
                   <strong>Suppression reason:</strong> {f.suppressed_reason}
                 </Typography>
               )}
+              {f.status === 'excluded' && (
+                <Typography variant="body2" color="text.secondary" mt={1}>
+                  <strong>Excluded from future scans.</strong> Manage exclusions in the Exclusions tab.
+                </Typography>
+              )}
             </CardContent>
           </Card>
         )
@@ -1023,6 +1058,44 @@ function FindingsTab() {
             onClick={() => suppressTarget && suppressMut.mutate({ id: suppressTarget.id, reason: suppressReason })}
           >
             Suppress
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Exclude dialog */}
+      <Dialog open={excludeDialogOpen} onClose={() => setExcludeDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Exclude Finding from Future Scans</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            <strong>{excludeTarget?.title}</strong>
+          </Typography>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            This finding will be permanently ignored in future scans for this firewall. Only the timestamp will be updated. You can remove the exclusion at any time from the Exclusions tab.
+          </Typography>
+          <TextField
+            label="Reason (required)"
+            value={excludeReason}
+            onChange={(e) => setExcludeReason(e.target.value)}
+            fullWidth
+            multiline
+            rows={3}
+            sx={{ mt: 1 }}
+            placeholder="e.g. Rule has geo-restriction + single destination IP — accepted risk"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExcludeDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={!excludeReason || excludeMut.isPending}
+            onClick={() => excludeTarget && excludeMut.mutate({
+              device_id: excludeTarget.device_id,
+              finding_title: excludeTarget.title,
+              reason: excludeReason,
+            })}
+          >
+            Exclude
           </Button>
         </DialogActions>
       </Dialog>
@@ -1170,7 +1243,7 @@ function ScanDetail({ scan }: { scan: SecurityScan }) {
                     label={f.status}
                     size="small"
                     variant="outlined"
-                    color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : 'success'}
+                    color={f.status === 'open' ? 'error' : f.status === 'suppressed' ? 'warning' : f.status === 'excluded' ? 'default' : 'success'}
                     sx={{ textTransform: 'capitalize', flexShrink: 0 }}
                   />
                 </Box>
@@ -1399,6 +1472,90 @@ function ScansTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Exclusions tab
+// ---------------------------------------------------------------------------
+
+function ExclusionsTab() {
+  const { push } = useToastStore()
+  const qc = useQueryClient()
+  const [filterDevice, setFilterDevice] = useState('')
+
+  const { data: exclusions = [], isLoading } = useQuery({
+    queryKey: ['security-exclusions', filterDevice],
+    queryFn: () => listExclusions(filterDevice || undefined),
+  })
+
+  const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deleteExclusion(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['security-exclusions'] })
+      qc.invalidateQueries({ queryKey: ['security-findings'] })
+      qc.invalidateQueries({ queryKey: ['security-summary'] })
+      push('Exclusion removed — finding will be re-evaluated on next scan')
+    },
+    onError: () => push('Failed to remove exclusion', 'error'),
+  })
+
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+          Excluded findings are ignored during scans — only their timestamp is updated. Remove an exclusion to re-evaluate the finding.
+        </Typography>
+        <FormControl size="small" sx={{ minWidth: 160 }}>
+          <InputLabel>Device</InputLabel>
+          <Select label="Device" value={filterDevice} onChange={(e) => setFilterDevice(e.target.value)}>
+            <MenuItem value="">All Devices</MenuItem>
+            {devices.map((d) => (
+              <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Box>
+
+      {isLoading && <CircularProgress size={24} />}
+      {!isLoading && exclusions.length === 0 && (
+        <Alert severity="info">No exclusions configured. Use the block icon on any finding to add one.</Alert>
+      )}
+
+      <Stack spacing={1}>
+        {exclusions.map((excl: SecurityExclusion) => (
+          <Paper key={excl.id} variant="outlined" sx={{ px: 2, py: 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+              <BlockIcon fontSize="small" sx={{ color: 'text.disabled', mt: 0.5, flexShrink: 0 }} />
+              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                <Typography variant="body2" fontWeight={600} noWrap>{excl.finding_title}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {excl.device_name ?? excl.device_id}
+                  {excl.created_by_username && ` · Added by ${excl.created_by_username}`}
+                  {` · ${new Date(excl.created_at).toLocaleDateString()}`}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                  {excl.reason}
+                </Typography>
+              </Box>
+              <Tooltip title="Remove exclusion">
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={() => deleteMut.mutate(excl.id)}
+                  disabled={deleteMut.isPending}
+                >
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          </Paper>
+        ))}
+      </Stack>
+    </Box>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1413,6 +1570,7 @@ export default function SecurityAdvisor() {
     await qc.invalidateQueries({ queryKey: ['security-scores'] })
     await qc.invalidateQueries({ queryKey: ['security-findings'] })
     await qc.invalidateQueries({ queryKey: ['security-scans'] })
+    await qc.invalidateQueries({ queryKey: ['security-exclusions'] })
     setRefreshing(false)
   }
 
@@ -1433,11 +1591,13 @@ export default function SecurityAdvisor() {
         <Tab label="Overview" />
         <Tab label="Findings" />
         <Tab label="Scan History" />
+        <Tab label="Exclusions" />
       </Tabs>
 
       <TabPanel value={tab} index={0}><OverviewTab /></TabPanel>
       <TabPanel value={tab} index={1}><FindingsTab /></TabPanel>
       <TabPanel value={tab} index={2}><ScansTab /></TabPanel>
+      <TabPanel value={tab} index={3}><ExclusionsTab /></TabPanel>
     </Box>
   )
 }

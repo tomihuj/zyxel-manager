@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { SecurityFinding, SecurityScan, DeviceRiskScore, SecuritySummary } from '../types'
+import type { SecurityFinding, SecurityScan, DeviceRiskScore, SecuritySummary, SecurityExclusion } from '../types'
 
 export const listFindings = (params?: {
   device_id?: string
@@ -46,3 +46,12 @@ export const getDeviceScores = (device_id: string) =>
 
 export const getSecuritySummary = () =>
   api.get<SecuritySummary>('/security/summary').then((r) => r.data)
+
+export const listExclusions = (device_id?: string) =>
+  api.get<SecurityExclusion[]>('/security/exclusions', { params: device_id ? { device_id } : {} }).then((r) => r.data)
+
+export const createExclusion = (device_id: string, finding_title: string, reason: string) =>
+  api.post<SecurityExclusion>('/security/exclusions', { device_id, finding_title, reason }).then((r) => r.data)
+
+export const deleteExclusion = (id: string) =>
+  api.delete<{ deleted: boolean }>(`/security/exclusions/${id}`).then((r) => r.data)
