@@ -17,6 +17,16 @@ import type { ConfigTemplate } from '../api/templates'
 import { listDevices } from '../api/devices'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { useToastStore } from '../store/toast'
+import ColumnVisibilityButton from '../components/ColumnVisibilityButton'
+import { useColumnVisibilityStore } from '../store/columnVisibility'
+
+const TEMPLATES_COLUMNS = [
+  { field: 'name', headerName: 'Name' },
+  { field: 'section', headerName: 'Section' },
+  { field: 'description', headerName: 'Description' },
+  { field: 'created_at', headerName: 'Created' },
+  { field: 'actions', headerName: 'Actions', hideable: false },
+]
 
 const SECTIONS = [
   'ntp', 'dns', 'interfaces', 'routing', 'nat',
@@ -28,6 +38,7 @@ const defaultForm = { name: '', description: '', section: 'ntp', data_json: '{}'
 export default function Templates() {
   const qc = useQueryClient()
   const toast = useToastStore()
+  const { visibility } = useColumnVisibilityStore()
   const { data: templates = [], isLoading } = useQuery({ queryKey: ['templates'], queryFn: listTemplates })
   const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: listDevices })
 
@@ -105,31 +116,36 @@ export default function Templates() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" fontWeight={700}>Config Templates</Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          New Template
-        </Button>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ColumnVisibilityButton tableId="templates" columns={TEMPLATES_COLUMNS} />
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            New Template
+          </Button>
+        </Box>
       </Box>
 
       <Card>
         <Table>
           <TableHead>
             <TableRow sx={{ '& th': { fontWeight: 600 } }}>
-              <TableCell>Name</TableCell>
-              <TableCell>Section</TableCell>
-              <TableCell>Description</TableCell>
-              <TableCell>Created</TableCell>
+              {visibility['templates']?.['name'] !== false && <TableCell>Name</TableCell>}
+              {visibility['templates']?.['section'] !== false && <TableCell>Section</TableCell>}
+              {visibility['templates']?.['description'] !== false && <TableCell>Description</TableCell>}
+              {visibility['templates']?.['created_at'] !== false && <TableCell>Created</TableCell>}
               <TableCell width={140} />
             </TableRow>
           </TableHead>
           <TableBody>
             {templates.map((t) => (
               <TableRow key={t.id} hover>
-                <TableCell sx={{ fontWeight: 600 }}>{t.name}</TableCell>
-                <TableCell><Chip size="small" label={t.section} /></TableCell>
-                <TableCell sx={{ color: 'text.secondary' }}>{t.description || '—'}</TableCell>
-                <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>
-                  {new Date(t.created_at).toLocaleDateString()}
-                </TableCell>
+                {visibility['templates']?.['name'] !== false && <TableCell sx={{ fontWeight: 600 }}>{t.name}</TableCell>}
+                {visibility['templates']?.['section'] !== false && <TableCell><Chip size="small" label={t.section} /></TableCell>}
+                {visibility['templates']?.['description'] !== false && <TableCell sx={{ color: 'text.secondary' }}>{t.description || '—'}</TableCell>}
+                {visibility['templates']?.['created_at'] !== false && (
+                  <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>
+                    {new Date(t.created_at).toLocaleDateString()}
+                  </TableCell>
+                )}
                 <TableCell>
                   <Tooltip title="Apply to devices">
                     <IconButton size="small" color="primary" onClick={() => openApply(t)}>

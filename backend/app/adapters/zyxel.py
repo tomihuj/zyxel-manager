@@ -511,6 +511,13 @@ class ZyxelAdapter(FirewallAdapter):
     def restore_config(self, device, credentials: dict, config: dict) -> dict:
         return {"success": False, "message": "Restore not yet supported for Zyxel adapter"}
 
+    def upgrade_firmware(self, device, credentials: dict, target_version: str,
+                         file_path: str = None) -> dict:
+        return {
+            "success": False,
+            "message": "Direct firmware upgrade not supported; use device web UI",
+        }
+
     def apply_patch(self, device, credentials: dict, section: str, patch: dict) -> dict:
         """Apply a configuration patch via CLI commands (write=1).
 

@@ -19,6 +19,8 @@ import { listDevices } from '../api/devices'
 import { useToastStore } from '../store/toast'
 import ConfirmDialog from '../components/ConfirmDialog'
 import type { ComplianceRule } from '../types'
+import TableConfigToolbar from '../components/TableConfigToolbar'
+import { useColumnVisibilityStore } from '../store/columnVisibility'
 
 const OPERATORS = [
   { value: 'eq',       label: 'Equals (eq)' },
@@ -37,6 +39,7 @@ const EMPTY_FORM = {
 }
 
 export default function Compliance() {
+  const { visibility, setVisibility } = useColumnVisibilityStore()
   const qc = useQueryClient()
   const { push } = useToastStore()
 
@@ -145,7 +148,7 @@ export default function Compliance() {
       ),
     },
     {
-      field: 'actions', headerName: '', width: 90, sortable: false,
+      field: 'actions', headerName: '', width: 90, sortable: false, hideable: false,
       renderCell: (p) => (
         <Box>
           <Tooltip title="Edit">
@@ -221,6 +224,9 @@ export default function Compliance() {
           pageSizeOptions={[10, 25]}
           initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
           disableRowSelectionOnClick
+          slots={{ toolbar: TableConfigToolbar }}
+          columnVisibilityModel={visibility['compliance-rules'] ?? {}}
+          onColumnVisibilityModelChange={(model) => setVisibility('compliance-rules', model)}
         />
       </Paper>
 
@@ -236,6 +242,9 @@ export default function Compliance() {
           pageSizeOptions={[10, 25, 50]}
           initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
           disableRowSelectionOnClick
+          slots={{ toolbar: TableConfigToolbar }}
+          columnVisibilityModel={visibility['compliance-results'] ?? {}}
+          onColumnVisibilityModelChange={(model) => setVisibility('compliance-results', model)}
         />
       </Paper>
 

@@ -15,11 +15,14 @@ import { totpSetup, totpVerify, totpDisable } from '../api/totp'
 import { listSessions, revokeSession, revokeAllSessions } from '../api/sessions'
 import type { User, Role, ApiToken, Session } from '../types'
 import ConfirmDialog from '../components/ConfirmDialog'
+import TableConfigToolbar from '../components/TableConfigToolbar'
+import { useColumnVisibilityStore } from '../store/columnVisibility'
 
 const defaultUser = { email: '', username: '', full_name: '', password: '', is_superuser: false }
 const defaultRole = { name: '', description: '' }
 
 export default function Users() {
+  const { visibility, setVisibility } = useColumnVisibilityStore()
   const qc = useQueryClient()
   const { data: users = [], isLoading } = useQuery({ queryKey: ['users'], queryFn: listUsers })
   const { data: roles = [] } = useQuery({ queryKey: ['roles'], queryFn: listRoles })
@@ -138,7 +141,7 @@ export default function Users() {
       renderCell: (p) => <Chip size="small" label={p.value ? 'Yes' : 'No'} color={p.value ? 'success' : 'default'} />,
     },
     {
-      field: 'actions', headerName: '', width: 100, sortable: false,
+      field: 'actions', headerName: '', width: 100, sortable: false, hideable: false,
       renderCell: (p) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <IconButton size="small" onClick={() => {
@@ -181,7 +184,7 @@ export default function Users() {
       valueGetter: (v) => new Date(v).toLocaleString(),
     },
     {
-      field: 'actions', headerName: '', width: 80, sortable: false,
+      field: 'actions', headerName: '', width: 80, sortable: false, hideable: false,
       renderCell: (p) => (
         !p.row.revoked ? (
           <IconButton size="small" color="error" onClick={() => setRevokeTokenId(p.row.id)}>
@@ -210,7 +213,10 @@ export default function Users() {
           </Box>
           <Card>
             <DataGrid rows={users} columns={userColumns} loading={isLoading} autoHeight
-              getRowId={(r) => r.id} pageSizeOptions={[25]} sx={{ border: 0 }} />
+              getRowId={(r) => r.id} pageSizeOptions={[25]} sx={{ border: 0 }}
+              slots={{ toolbar: TableConfigToolbar }}
+              columnVisibilityModel={visibility['users'] ?? {}}
+              onColumnVisibilityModelChange={(model) => setVisibility('users', model)} />
           </Card>
         </Box>
       )}
@@ -270,6 +276,9 @@ export default function Users() {
               getRowId={(r) => r.id}
               pageSizeOptions={[25]}
               sx={{ border: 0 }}
+              slots={{ toolbar: TableConfigToolbar }}
+              columnVisibilityModel={visibility['api-tokens'] ?? {}}
+              onColumnVisibilityModelChange={(model) => setVisibility('api-tokens', model)}
             />
           </Card>
         </Box>

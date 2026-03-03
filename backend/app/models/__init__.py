@@ -12,6 +12,10 @@ from app.models.compliance import ComplianceRule, ComplianceResult
 from app.models.metric import DeviceMetric
 from app.models.refresh_token import RefreshToken
 from app.models.security import SecurityFinding, SecurityScan, DeviceRiskScore
+from app.models.vpn import VpnTunnel
+from app.models.scheduled_report import ScheduledReport
+from app.models.firmware import FirmwareUpgrade
+from app.models.syslog import SyslogEntry
 
 __all__ = [
     "User", "Role", "Permission", "UserRole",
@@ -28,4 +32,8 @@ __all__ = [
     "DeviceMetric",
     "RefreshToken",
     "SecurityFinding", "SecurityScan", "DeviceRiskScore",
+    "VpnTunnel",
+    "ScheduledReport",
+    "FirmwareUpgrade",
+    "SyslogEntry",
 ]

@@ -26,6 +26,9 @@ import LightModeIcon from '@mui/icons-material/LightMode'
 import SettingsIcon from '@mui/icons-material/Settings'
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt'
 import SecurityIcon from '@mui/icons-material/Security'
+import VpnKeyIcon from '@mui/icons-material/VpnKey'
+import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
+import TerminalIcon from '@mui/icons-material/Terminal'
 import { useAuthStore } from '../store/auth'
 import { useDiagStore } from '../store/diag'
 import { useThemeStore } from '../store/theme'
@@ -55,6 +58,9 @@ const NAV = [
   { label: 'Metrics',      path: '/metrics',       icon: <BarChartIcon /> },
   { label: 'Topology',     path: '/topology',      icon: <AccountTreeIcon /> },
   { label: 'Firmware',     path: '/firmware',      icon: <SystemUpdateAltIcon /> },
+  { label: 'VPN Monitor',  path: '/vpn',           icon: <VpnKeyIcon /> },
+  { label: 'Sched. Reports', path: '/scheduled-reports', icon: <ScheduleSendIcon /> },
+  { label: 'Syslog',       path: '/syslog',        icon: <TerminalIcon /> },
   { label: 'Settings',     path: '/settings',      icon: <SettingsIcon /> },
 ]
 

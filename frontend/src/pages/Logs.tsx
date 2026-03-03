@@ -13,6 +13,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getAuditLogs, getActionConfigs, updateActionConfig } from '../api/logs'
 import { api } from '../api/client'
 import type { AuditLog, AuditActionConfig } from '../types'
+import ColumnVisibilityButton from '../components/ColumnVisibilityButton'
+import { useColumnVisibilityStore } from '../store/columnVisibility'
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -105,8 +107,18 @@ function DetailsCell({ details }: { details: Record<string, unknown> | null }) {
 
 // ─── LogsTab ─────────────────────────────────────────────────────────────────
 
+const AUDIT_LOGS_COLUMNS = [
+  { field: 'created_at', headerName: 'Date Time' },
+  { field: 'username', headerName: 'User' },
+  { field: 'action', headerName: 'Action' },
+  { field: 'resource', headerName: 'Resource' },
+  { field: 'details', headerName: 'Details' },
+  { field: 'ip_address', headerName: 'IP Address' },
+]
+
 function LogsTab() {
   const [showFilters, setShowFilters] = useState(false)
+  const { visibility } = useColumnVisibilityStore()
   const [action, setAction] = useState('')
   const [username, setUsername] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -139,6 +151,7 @@ function LogsTab() {
         <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
           {logs.length} entries{offset > 0 ? ` (page ${Math.floor(offset / LIMIT) + 1})` : ''}
         </Typography>
+        <ColumnVisibilityButton tableId="audit-logs" columns={AUDIT_LOGS_COLUMNS} />
         <Tooltip title="Toggle filters">
           <IconButton onClick={() => setShowFilters(f => !f)} color={showFilters ? 'primary' : 'default'}>
             <FilterListIcon />
@@ -194,18 +207,18 @@ function LogsTab() {
           <Table size="small">
             <TableHead>
               <TableRow sx={{ '& th': { fontWeight: 700, fontSize: 12, bgcolor: 'grey.50', borderBottom: 2, borderColor: 'divider' } }}>
-                <TableCell sx={{ minWidth: 160 }}>Date / Time</TableCell>
-                <TableCell sx={{ minWidth: 110 }}>User</TableCell>
-                <TableCell sx={{ minWidth: 200 }}>Action</TableCell>
-                <TableCell sx={{ minWidth: 120 }}>Resource</TableCell>
-                <TableCell sx={{ minWidth: 260 }}>Details</TableCell>
-                <TableCell sx={{ minWidth: 120 }}>IP Address</TableCell>
+                {visibility['audit-logs']?.['created_at'] !== false && <TableCell sx={{ minWidth: 160 }}>Date / Time</TableCell>}
+                {visibility['audit-logs']?.['username'] !== false && <TableCell sx={{ minWidth: 110 }}>User</TableCell>}
+                {visibility['audit-logs']?.['action'] !== false && <TableCell sx={{ minWidth: 200 }}>Action</TableCell>}
+                {visibility['audit-logs']?.['resource'] !== false && <TableCell sx={{ minWidth: 120 }}>Resource</TableCell>}
+                {visibility['audit-logs']?.['details'] !== false && <TableCell sx={{ minWidth: 260 }}>Details</TableCell>}
+                {visibility['audit-logs']?.['ip_address'] !== false && <TableCell sx={{ minWidth: 120 }}>IP Address</TableCell>}
               </TableRow>
             </TableHead>
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 3 }}>
+                  <TableCell colSpan={AUDIT_LOGS_COLUMNS.filter(c => visibility['audit-logs']?.[c.field] !== false).length || AUDIT_LOGS_COLUMNS.length} align="center" sx={{ py: 3 }}>
                     <CircularProgress size={24} />
                   </TableCell>
                 </TableRow>
@@ -216,35 +229,41 @@ function LogsTab() {
                   hover
                   sx={{ bgcolor: log.action.endsWith('_failed') ? 'error.50' : undefined }}
                 >
-                  <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>{formatDate(log.created_at)}</TableCell>
-                  <TableCell>
-                    {log.username
-                      ? <Chip size="small" label={log.username} variant="outlined" sx={{ fontSize: 11 }} />
-                      : <Typography fontSize={11} color="text.disabled">system</Typography>
-                    }
-                  </TableCell>
-                  <TableCell>{actionChip(log.action)}</TableCell>
-                  <TableCell sx={{ fontSize: 12 }}>
-                    {log.resource_type ? (
-                      <Box>
-                        <Typography fontSize={11} color="text.secondary">{log.resource_type}</Typography>
-                        {log.resource_id && (
-                          <Typography fontSize={11} fontFamily="monospace" color="text.disabled">
-                            {log.resource_id.substring(0, 8)}…
-                          </Typography>
-                        )}
-                      </Box>
-                    ) : <Typography fontSize={11} color="text.disabled">—</Typography>}
-                  </TableCell>
-                  <TableCell><DetailsCell details={log.details} /></TableCell>
-                  <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', color: 'text.secondary' }}>
-                    {log.ip_address ?? '—'}
-                  </TableCell>
+                  {visibility['audit-logs']?.['created_at'] !== false && <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>{formatDate(log.created_at)}</TableCell>}
+                  {visibility['audit-logs']?.['username'] !== false && (
+                    <TableCell>
+                      {log.username
+                        ? <Chip size="small" label={log.username} variant="outlined" sx={{ fontSize: 11 }} />
+                        : <Typography fontSize={11} color="text.disabled">system</Typography>
+                      }
+                    </TableCell>
+                  )}
+                  {visibility['audit-logs']?.['action'] !== false && <TableCell>{actionChip(log.action)}</TableCell>}
+                  {visibility['audit-logs']?.['resource'] !== false && (
+                    <TableCell sx={{ fontSize: 12 }}>
+                      {log.resource_type ? (
+                        <Box>
+                          <Typography fontSize={11} color="text.secondary">{log.resource_type}</Typography>
+                          {log.resource_id && (
+                            <Typography fontSize={11} fontFamily="monospace" color="text.disabled">
+                              {log.resource_id.substring(0, 8)}…
+                            </Typography>
+                          )}
+                        </Box>
+                      ) : <Typography fontSize={11} color="text.disabled">—</Typography>}
+                    </TableCell>
+                  )}
+                  {visibility['audit-logs']?.['details'] !== false && <TableCell><DetailsCell details={log.details} /></TableCell>}
+                  {visibility['audit-logs']?.['ip_address'] !== false && (
+                    <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', color: 'text.secondary' }}>
+                      {log.ip_address ?? '—'}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
               {!isLoading && logs.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: 13 }}>
+                  <TableCell colSpan={AUDIT_LOGS_COLUMNS.filter(c => visibility['audit-logs']?.[c.field] !== false).length || AUDIT_LOGS_COLUMNS.length} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: 13 }}>
                     No log entries found.
                   </TableCell>
                 </TableRow>

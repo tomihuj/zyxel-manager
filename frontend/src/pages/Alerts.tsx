@@ -16,6 +16,8 @@ import {
 import { useToastStore } from '../store/toast'
 import ConfirmDialog from '../components/ConfirmDialog'
 import type { AlertRule, AlertDelivery } from '../types'
+import TableConfigToolbar from '../components/TableConfigToolbar'
+import { useColumnVisibilityStore } from '../store/columnVisibility'
 
 const EVENT_TYPES = [
   { value: 'device_offline',  label: 'Device Offline' },
@@ -42,6 +44,7 @@ const EMPTY_FORM = {
 }
 
 export default function Alerts() {
+  const { visibility, setVisibility } = useColumnVisibilityStore()
   const qc = useQueryClient()
   const { push } = useToastStore()
 
@@ -154,7 +157,7 @@ export default function Alerts() {
       valueGetter: (v) => new Date(v).toLocaleString(),
     },
     {
-      field: 'actions', headerName: '', width: 90, sortable: false,
+      field: 'actions', headerName: '', width: 90, sortable: false, hideable: false,
       renderCell: (p) => (
         <Box>
           <Tooltip title="Edit">
@@ -214,6 +217,9 @@ export default function Alerts() {
           pageSizeOptions={[10, 25]}
           initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
           disableRowSelectionOnClick
+          slots={{ toolbar: TableConfigToolbar }}
+          columnVisibilityModel={visibility['alert-rules'] ?? {}}
+          onColumnVisibilityModelChange={(model) => setVisibility('alert-rules', model)}
         />
       </Paper>
 
@@ -229,6 +235,9 @@ export default function Alerts() {
           pageSizeOptions={[10, 25]}
           initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
           disableRowSelectionOnClick
+          slots={{ toolbar: TableConfigToolbar }}
+          columnVisibilityModel={visibility['alert-deliveries'] ?? {}}
+          onColumnVisibilityModelChange={(model) => setVisibility('alert-deliveries', model)}
         />
       </Paper>
 

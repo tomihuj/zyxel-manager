@@ -25,3 +25,9 @@ class FirewallAdapter(ABC):
     def restore_config(self, device, credentials: dict, config: dict) -> dict:
         """Push a full config dict to the device. Returns {success, message}."""
         raise NotImplementedError("restore_config not supported by this adapter")
+
+    def upgrade_firmware(self, device, credentials: dict, target_version: str,
+                         file_path: str = None) -> dict:
+        """Optional: upgrade device firmware. file_path is the local path to an uploaded .bin/.zip.
+        Returns {success: bool, message: str}."""
+        return {"success": False, "message": "Firmware upgrade not supported by this adapter"}

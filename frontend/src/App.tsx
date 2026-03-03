@@ -21,6 +21,9 @@ import Topology from './pages/Topology'
 import Settings from './pages/Settings'
 import Firmware from './pages/Firmware'
 import SecurityAdvisor from './pages/SecurityAdvisor'
+import VpnMonitor from './pages/VpnMonitor'
+import ScheduledReports from './pages/ScheduledReports'
+import SyslogViewer from './pages/SyslogViewer'
 
 export default function App() {
   return (
@@ -46,6 +49,9 @@ export default function App() {
         <Route path="settings" element={<Settings />} />
         <Route path="firmware" element={<Firmware />} />
         <Route path="security" element={<SecurityAdvisor />} />
+        <Route path="vpn" element={<VpnMonitor />} />
+        <Route path="scheduled-reports" element={<ScheduledReports />} />
+        <Route path="syslog" element={<SyslogViewer />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

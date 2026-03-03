@@ -16,6 +16,10 @@ celery_app = Celery(
         "app.tasks.metrics",
         "app.tasks.poll_devices",
         "app.tasks.security",
+        "app.tasks.vpn",
+        "app.tasks.scheduled_reports",
+        "app.tasks.firmware",
+        "app.tasks.provisioning",
     ],
 )
 
@@ -60,6 +64,14 @@ celery_app.conf.update(
         "security-scan": {
             "task": "security.run_security_scan",
             "schedule": 21600.0,  # every 6 hours
+        },
+        "vpn-collect": {
+            "task": "vpn.collect_vpn_status",
+            "schedule": 60.0,
+        },
+        "scheduled-reports-check": {
+            "task": "scheduled_reports.run_due_reports",
+            "schedule": 300.0,
         },
     },
 )

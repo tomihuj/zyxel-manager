@@ -8,6 +8,8 @@ import {
   ToggleButton, ToggleButtonGroup, Select, FormControl, InputLabel,
 } from '@mui/material'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
+import TableConfigToolbar from '../components/TableConfigToolbar'
+import { useColumnVisibilityStore } from '../store/columnVisibility'
 import AddIcon from '@mui/icons-material/Add'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import DifferenceIcon from '@mui/icons-material/Difference'
@@ -30,8 +32,10 @@ import DownloadIcon from '@mui/icons-material/Download'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import TableRowsIcon from '@mui/icons-material/TableRows'
 import SearchIcon from '@mui/icons-material/Search'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDevices, listDeletedDevices, createDevice, updateDevice, deleteDevice, restoreDevice, permanentDeleteDevice, testConnection, syncDevice, getDeviceConfig } from '../api/devices'
+import { cloneDevice } from '../api/provisioning'
 import { listGroups } from '../api/groups'
 import { api } from '../api/client'
 import type { Device } from '../types'
@@ -206,6 +210,7 @@ export default function Devices() {
   const { testConnectionTimeout } = useSettingsStore()
   const { widths: savedWidths, setWidth } = useColumnWidthsStore()
   const colWidths = savedWidths['devices'] ?? {}
+  const { visibility, setVisibility } = useColumnVisibilityStore()
 
   const [open, setOpen] = useState(false)
   const [snack, setSnack] = useState('')
@@ -229,6 +234,8 @@ export default function Devices() {
   const [csvLoading, setCsvLoading] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
   const [permanentDeleteId, setPermanentDeleteId] = useState<string | null>(null)
+  const [cloneSource, setCloneSource] = useState<{ id: string; name: string } | null>(null)
+  const [cloneForm, setCloneForm] = useState({ name: '', mgmt_ip: '', port: 443, protocol: 'https', username: '', password: '' })
 
   const { data: deletedDevices = [] } = useQuery({
     queryKey: ['devices-deleted'],
@@ -366,6 +373,17 @@ export default function Devices() {
     onError: (e: any) => setSnack(e?.response?.data?.detail ?? 'Sync failed'),
   })
 
+  const cloneMut = useMutation({
+    mutationFn: ({ sourceId, body }: { sourceId: string; body: any }) =>
+      cloneDevice(sourceId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      setCloneSource(null)
+      setSnack('Clone started — new device will appear shortly')
+    },
+    onError: () => setSnack('Clone failed'),
+  })
+
   // Apply any saved column widths (drops flex when a saved width exists)
   const applyWidth = (col: GridColDef<Device>): GridColDef<Device> => {
     const saved = colWidths[col.field]
@@ -442,7 +460,7 @@ export default function Devices() {
       valueGetter: (v) => v ?? '—',
     }),
     applyWidth({
-      field: 'actions', headerName: '', width: 196, sortable: false,
+      field: 'actions', headerName: '', width: 196, sortable: false, hideable: false,
       renderCell: (p) => (
         <Box>
           <Tooltip title="Configure">
@@ -474,6 +492,9 @@ export default function Devices() {
           </Tooltip>
           <Tooltip title="View Config">
             <IconButton size="small" onClick={() => openConfig(p.row)}><DescriptionIcon fontSize="small" /></IconButton>
+          </Tooltip>
+          <Tooltip title="Clone">
+            <IconButton size="small" onClick={() => { setCloneSource({ id: p.row.id, name: p.row.name }); setCloneForm({ name: '', mgmt_ip: '', port: 443, protocol: 'https', username: '', password: '' }) }}><ContentCopyIcon fontSize="small" /></IconButton>
           </Tooltip>
           <Tooltip title="Delete">
             <IconButton size="small" color="error" onClick={() => setDeleteDeviceId(p.row.id)}><DeleteIcon fontSize="small" /></IconButton>
@@ -549,6 +570,9 @@ export default function Devices() {
       <Card>
         <DataGrid rows={filteredDevices} columns={columns} loading={isLoading} autoHeight
           getRowId={(r) => r.id} pageSizeOptions={[25, 50]} sx={{ border: 0 }}
+          slots={{ toolbar: TableConfigToolbar }}
+          columnVisibilityModel={visibility['devices'] ?? {}}
+          onColumnVisibilityModelChange={(model) => setVisibility('devices', model)}
           onColumnWidthChange={(params) => setWidth('devices', params.colDef.field, params.width)} />
       </Card>
 
@@ -949,6 +973,31 @@ export default function Devices() {
         onClose={() => setPermanentDeleteId(null)}
         loading={permanentDeleteMut.isPending}
       />
+
+      {/* Clone Dialog */}
+      <Dialog open={!!cloneSource} onClose={() => setCloneSource(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Clone Device: {cloneSource?.name}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <TextField label="New Device Name" size="small" fullWidth value={cloneForm.name}
+            onChange={(e) => setCloneForm((f) => ({ ...f, name: e.target.value }))} />
+          <TextField label="Management IP" size="small" fullWidth value={cloneForm.mgmt_ip}
+            onChange={(e) => setCloneForm((f) => ({ ...f, mgmt_ip: e.target.value }))} />
+          <TextField label="Port" size="small" type="number" fullWidth value={cloneForm.port}
+            onChange={(e) => setCloneForm((f) => ({ ...f, port: Number(e.target.value) }))} />
+          <TextField label="Username" size="small" fullWidth value={cloneForm.username}
+            onChange={(e) => setCloneForm((f) => ({ ...f, username: e.target.value }))} />
+          <TextField label="Password" size="small" type="password" fullWidth value={cloneForm.password}
+            onChange={(e) => setCloneForm((f) => ({ ...f, password: e.target.value }))} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCloneSource(null)}>Cancel</Button>
+          <Button variant="contained"
+            disabled={!cloneForm.name || !cloneForm.mgmt_ip || cloneMut.isPending}
+            onClick={() => cloneMut.mutate({ sourceId: cloneSource!.id, body: cloneForm })}>
+            Clone
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar open={!!snack} autoHideDuration={3000} onClose={() => setSnack('')}
         message={snack} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />

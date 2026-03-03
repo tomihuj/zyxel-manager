@@ -34,7 +34,15 @@ _MOCK_CONFIG_TEMPLATE = {
         {"name": "Allow-LAN-to-WAN", "src_zone": "LAN", "dst_zone": "WAN", "action": "allow", "enabled": True},
         {"name": "Block-WAN-to-LAN", "src_zone": "WAN", "dst_zone": "LAN", "action": "deny", "enabled": True},
     ],
-    "vpn": {"ipsec_tunnels": [], "ssl_vpn_enabled": False},
+    "vpn": {
+        "ipsec_tunnels": [
+            {"name": "HQ-Branch1", "remote_gateway": "10.0.1.1", "status": "up",
+             "local_subnet": "192.168.1.0/24", "remote_subnet": "10.0.1.0/24"},
+            {"name": "HQ-Branch2", "remote_gateway": "10.0.2.1", "status": "down",
+             "local_subnet": "192.168.1.0/24", "remote_subnet": "10.0.2.0/24"},
+        ],
+        "ssl_vpn_enabled": False,
+    },
     "dns": {"servers": ["8.8.8.8", "8.8.4.4"], "search_domain": "local"},
     "ntp": {"servers": ["pool.ntp.org", "time.google.com"], "timezone": "UTC", "enabled": True},
     "address_objects": [{"name": "LAN_SUBNET", "type": "subnet", "address": "192.168.1.0/24"}],
@@ -125,3 +133,14 @@ class MockAdapter(FirewallAdapter):
         time.sleep(random.uniform(0.05, 0.15))
         _device_states[str(device.id)] = copy.deepcopy(config)
         return {"success": True, "message": "Configuration restored successfully"}
+
+    def upgrade_firmware(self, device, credentials: dict, target_version: str,
+                         file_path: str = None) -> dict:
+        import time
+        import os
+        time.sleep(5)  # simulate upgrade time
+        state = _get_state(str(device.id))
+        prev = state["system"].get("firmware", "unknown")
+        state["system"]["firmware"] = target_version
+        file_info = f" (file: {os.path.basename(file_path)})" if file_path else ""
+        return {"success": True, "message": f"Mock: upgraded from {prev} to {target_version}{file_info}"}
